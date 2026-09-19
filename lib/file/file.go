@@ -101,7 +101,6 @@ func (s *JsonDb) LoadGlobalFromJsonFile() {
 		if json.Unmarshal([]byte(v), &post) != nil {
 			return
 		}
-		post.RebuildBlackIPSet()
 		s.globalMu.Lock()
 		s.Global = post
 		s.globalMu.Unlock()

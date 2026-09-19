@@ -20,7 +20,8 @@ import (
 const (
 	defaultBlacklistSource = "manual"
 	defaultPageSize        = 50
-	currentSchemaVersion   = 1
+	currentSchemaVersion   = 2
+	legacyImportMarkerKey  = "legacy_global_blacklist_imported"
 )
 
 var (
@@ -121,6 +122,16 @@ CREATE INDEX IF NOT EXISTS idx_blacklist_expire_at
     ON blacklist_ip(expire_at);
 CREATE INDEX IF NOT EXISTS idx_blacklist_created_at
     ON blacklist_ip(created_at DESC, id DESC);
+`
+
+// schemaV2 contains only the additions made by the version 1 -> 2
+// migration. Keep schemaV1 unchanged; historical migrations are immutable.
+const schemaV2 = `
+CREATE TABLE IF NOT EXISTS blacklist_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 `
 
 const (
@@ -225,6 +236,12 @@ func migrateDatabase(db *sql.DB) error {
 				return fmt.Errorf("migrate blacklist schema 0 to 1: %w", err)
 			}
 			version = 1
+		case 1:
+			if err := migrateV1ToV2(tx); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("migrate blacklist schema 1 to 2: %w", err)
+			}
+			version = 2
 		default:
 			_ = tx.Rollback()
 			return fmt.Errorf("no migration for blacklist schema version %d", version)
@@ -252,6 +269,13 @@ func migrateV0ToV1(tx *sql.Tx) error {
 	}
 	if _, err := tx.Exec("CREATE INDEX idx_blacklist_created_at ON blacklist_ip(created_at DESC, id DESC)"); err != nil {
 		return fmt.Errorf("create blacklist created-at index: %w", err)
+	}
+	return nil
+}
+
+func migrateV1ToV2(tx *sql.Tx) error {
+	if _, err := tx.Exec(schemaV2); err != nil {
+		return fmt.Errorf("create schema v2: %w", err)
 	}
 	return nil
 }
@@ -491,12 +515,176 @@ func (r *Repository) BulkInsert(entries []BlacklistIP) error {
 	return nil
 }
 
-// NormalizeIP trims and canonicalizes a bare IP or an IP with a port. Ports
+// WalkActive streams enabled, non-expired records directly from SQLite. The
+// callback is invoked once per row and records are not accumulated in a Go
+// slice, which keeps startup memory bounded for large blacklists.
+func (r *Repository) WalkActive(now int64, fn func(BlacklistIP) error) error {
+	if fn == nil {
+		return errors.New("blacklist active-row callback is nil")
+	}
+	rows, err := r.db.Query(
+		"SELECT "+selectColumns+" FROM blacklist_ip WHERE enabled = 1 AND (expire_at IS NULL OR expire_at > ?) ORDER BY created_at DESC, id DESC",
+		now,
+	)
+	if err != nil {
+		return fmt.Errorf("walk active blacklist IPs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		entry, err := scanBlacklistIP(rows)
+		if err != nil {
+			return fmt.Errorf("scan active blacklist IP: %w", err)
+		}
+		if err := fn(entry); err != nil {
+			return fmt.Errorf("process active blacklist IP %q: %w", entry.IP, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate active blacklist IPs: %w", err)
+	}
+	return nil
+}
+
+// CountActive returns the number of records that WalkActive would stream.
+func (r *Repository) CountActive(now int64) (int64, error) {
+	var count int64
+	if err := r.db.QueryRow(
+		"SELECT COUNT(*) FROM blacklist_ip WHERE enabled = 1 AND (expire_at IS NULL OR expire_at > ?)",
+		now,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count active blacklist IPs: %w", err)
+	}
+	return count, nil
+}
+
+// LegacyImportStats describes one atomic legacy global blacklist import.
+type LegacyImportStats struct {
+	Total           int
+	Imported        int
+	Duplicates      int
+	Invalid         int
+	SkippedByMarker bool
+	InvalidSamples  []string
+}
+
+// ImportLegacyOnce imports legacy global.json IPs exactly once. The marker,
+// valid inserts, duplicate handling, and empty-input case share one
+// transaction. Existing rows retain their metadata because inserts use
+// ON CONFLICT DO NOTHING.
+func (r *Repository) ImportLegacyOnce(rawIPs []string) (LegacyImportStats, error) {
+	stats := LegacyImportStats{Total: len(rawIPs)}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return stats, fmt.Errorf("begin legacy blacklist import: %w", err)
+	}
+
+	var marker string
+	err = tx.QueryRow("SELECT value FROM blacklist_meta WHERE key = ?", legacyImportMarkerKey).Scan(&marker)
+	if err == nil {
+		stats.SkippedByMarker = true
+		if err := tx.Commit(); err != nil {
+			return stats, fmt.Errorf("commit skipped legacy blacklist import: %w", err)
+		}
+		return stats, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return stats, fmt.Errorf("check legacy blacklist import marker: %w", err)
+	}
+
+	stmt, err := tx.Prepare(insertSQL + " ON CONFLICT(ip) DO NOTHING")
+	if err != nil {
+		_ = tx.Rollback()
+		return stats, fmt.Errorf("prepare legacy blacklist import: %w", err)
+	}
+	now := time.Now().Unix()
+	for _, rawIP := range rawIPs {
+		addr, err := ParseIPAddr(rawIP)
+		if err != nil {
+			stats.Invalid++
+			if len(stats.InvalidSamples) < 10 {
+				stats.InvalidSamples = append(stats.InvalidSamples, strings.TrimSpace(rawIP))
+			}
+			continue
+		}
+		entry := BlacklistIP{
+			IP:          addr.String(),
+			Source:      "import",
+			Enabled:     true,
+			FirstSeenAt: now,
+			LastSeenAt:  now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		result, err := stmt.Exec(entryArgs(entry)...)
+		if err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return stats, fmt.Errorf("import legacy blacklist IP %q: %w", entry.IP, err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return stats, fmt.Errorf("count imported legacy blacklist IP %q: %w", entry.IP, err)
+		}
+		if rows == 0 {
+			stats.Duplicates++
+		} else {
+			stats.Imported++
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		_ = tx.Rollback()
+		return stats, fmt.Errorf("close legacy blacklist import statement: %w", err)
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO blacklist_meta(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING",
+		legacyImportMarkerKey, "1", now,
+	); err != nil {
+		_ = tx.Rollback()
+		return stats, fmt.Errorf("write legacy blacklist import marker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return stats, fmt.Errorf("commit legacy blacklist import: %w", err)
+	}
+	return stats, nil
+}
+
+// GetMeta reads a metadata value. The boolean is false when the key is
+// absent, without treating absence as a database error.
+func (r *Repository) GetMeta(key string) (string, bool, error) {
+	var value string
+	err := r.db.QueryRow("SELECT value FROM blacklist_meta WHERE key = ?", key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("get blacklist metadata %q: %w", key, err)
+	}
+	return value, true, nil
+}
+
+// SetMeta writes a metadata value for administrative and migration tooling.
+func (r *Repository) SetMeta(key, value string) error {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("blacklist metadata key is empty")
+	}
+	if _, err := r.db.Exec(
+		"INSERT INTO blacklist_meta(key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+		key, value, time.Now().Unix(),
+	); err != nil {
+		return fmt.Errorf("set blacklist metadata %q: %w", key, err)
+	}
+	return nil
+}
+
+// ParseIPAddr trims and canonicalizes a bare IP or an IP with a port. Ports
 // are accepted only as input and never become part of the persisted key.
-func NormalizeIP(raw string) (string, error) {
+func ParseIPAddr(raw string) (netip.Addr, error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
-		return "", fmt.Errorf("%w: empty value", ErrInvalidIP)
+		return netip.Addr{}, fmt.Errorf("%w: empty value", ErrInvalidIP)
 	}
 	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
 		value = value[1 : len(value)-1]
@@ -508,11 +696,20 @@ func NormalizeIP(raw string) (string, error) {
 	if addrPort, err := netip.ParseAddrPort(value); err == nil {
 		return canonicalAddr(addrPort.Addr()), nil
 	}
-	return "", fmt.Errorf("%w: %q", ErrInvalidIP, raw)
+	return netip.Addr{}, fmt.Errorf("%w: %q", ErrInvalidIP, raw)
 }
 
-func canonicalAddr(addr netip.Addr) string {
-	return addr.Unmap().WithZone("").String()
+// NormalizeIP returns the canonical string form used as the SQLite key.
+func NormalizeIP(raw string) (string, error) {
+	addr, err := ParseIPAddr(raw)
+	if err != nil {
+		return "", err
+	}
+	return addr.String(), nil
+}
+
+func canonicalAddr(addr netip.Addr) netip.Addr {
+	return addr.Unmap().WithZone("")
 }
 
 func inputToEntry(input BlacklistIPInput) BlacklistIP {

@@ -58,15 +58,18 @@ func TestBlacklistRepositoryInitializesIdempotently(t *testing.T) {
 		t.Fatalf("user_version = %d, want %d", schemaVersion, currentSchemaVersion)
 	}
 
-	var tableCount, indexCount int
+	var tableCount, metadataTableCount, indexCount int
 	if err := repository.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'blacklist_ip'").Scan(&tableCount); err != nil {
 		t.Fatalf("check blacklist table: %v", err)
+	}
+	if err := repository.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'blacklist_meta'").Scan(&metadataTableCount); err != nil {
+		t.Fatalf("check blacklist metadata table: %v", err)
 	}
 	if err := repository.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('uk_blacklist_ip', 'idx_blacklist_source', 'idx_blacklist_expire_at', 'idx_blacklist_created_at')").Scan(&indexCount); err != nil {
 		t.Fatalf("check blacklist indexes: %v", err)
 	}
-	if tableCount != 1 || indexCount != 4 {
-		t.Fatalf("schema objects = table %d, indexes %d; want table 1, indexes 4", tableCount, indexCount)
+	if tableCount != 1 || metadataTableCount != 1 || indexCount != 4 {
+		t.Fatalf("schema objects = blacklist table %d, metadata table %d, indexes %d; want 1, 1, 4", tableCount, metadataTableCount, indexCount)
 	}
 	var createdAtIndexSQL string
 	if err := repository.db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_blacklist_created_at'").Scan(&createdAtIndexSQL); err != nil {
@@ -157,6 +160,49 @@ VALUES ('192.0.2.240', 1, 1, 1, 1);
 	}
 	if !strings.Contains(indexSQL, "created_at DESC, id DESC") {
 		t.Fatalf("migrated index SQL = %q, want created_at/id ordering", indexSQL)
+	}
+}
+
+func TestBlacklistRepositoryMigratesVersionOneToVersionTwoWithoutLosingData(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "blacklist.db")
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open version one database: %v", err)
+	}
+	rawDB.SetMaxOpenConns(1)
+	if _, err := rawDB.Exec(schemaV1 + `
+INSERT INTO blacklist_ip (ip, first_seen_at, last_seen_at, created_at, updated_at)
+VALUES ('192.0.2.241', 1, 1, 1, 1);
+PRAGMA user_version = 1;
+`); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("create version one database: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close version one database: %v", err)
+	}
+
+	repository, err := NewBlacklistRepository(dbPath)
+	if err != nil {
+		t.Fatalf("migrate version one database: %v", err)
+	}
+	defer repository.Close()
+	var version int64
+	if err := repository.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read migrated version: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("migrated user_version = %d, want 2", version)
+	}
+	if _, err := repository.GetByIP("192.0.2.241"); err != nil {
+		t.Fatalf("migrated record not preserved: %v", err)
+	}
+	var metadataTableCount int
+	if err := repository.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'blacklist_meta'").Scan(&metadataTableCount); err != nil {
+		t.Fatalf("check metadata table: %v", err)
+	}
+	if metadataTableCount != 1 {
+		t.Fatalf("metadata table count = %d, want 1", metadataTableCount)
 	}
 }
 

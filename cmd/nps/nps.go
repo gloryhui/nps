@@ -19,6 +19,7 @@ import (
 
 	"ehang.io/nps/lib/file"
 	"ehang.io/nps/lib/install"
+	"ehang.io/nps/lib/security"
 	"ehang.io/nps/lib/version"
 	"ehang.io/nps/server/connection"
 	"ehang.io/nps/server/tool"
@@ -135,7 +136,9 @@ func main() {
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
 		logs.Error(err, "service function disabled")
-		run()
+		if err := run(); err != nil {
+			log.Fatal(err)
+		}
 		// run without service
 		wg := sync.WaitGroup{}
 		wg.Add(1)
@@ -206,7 +209,9 @@ func main() {
 		}
 	}
 
-	_ = s.Run()
+	if err := s.Run(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func printSlogan() {
@@ -406,49 +411,54 @@ func installNps() {
 }
 
 type nps struct {
-	exit chan struct{}
+	exit     chan struct{}
+	exitOnce sync.Once
 }
 
 func (p *nps) Start(s service.Service) error {
 	_, _ = s.Status()
-	go p.run()
+	if err := p.start(); err != nil {
+		return err
+	}
+	go func() {
+		<-p.exit
+		logs.Warning("stop...")
+	}()
 	return nil
 }
+
+func (p *nps) start() (runErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			const size = 64 << 10
+			buf := make([]byte, size)
+			buf = buf[:runtime.Stack(buf, false)]
+			runErr = fmt.Errorf("nps panic serving %v\n%s", recovered, string(buf))
+		}
+	}()
+	return run()
+}
+
 func (p *nps) Stop(s service.Service) error {
 	_, _ = s.Status()
-	close(p.exit)
+	p.exitOnce.Do(func() { close(p.exit) })
+	if err := security.CloseDefaultBlacklistService(); err != nil {
+		logs.Error("close blacklist service: %v", err)
+	}
 	if service.Interactive() {
 		os.Exit(0)
 	}
 	return nil
 }
 
-func (p *nps) run() error {
-	defer func() {
-		if err := recover(); err != nil {
-			const size = 64 << 10
-			buf := make([]byte, size)
-			buf = buf[:runtime.Stack(buf, false)]
-			logs.Warning("nps: panic serving %v: %v\n%s", err, string(buf))
-		}
-	}()
-	run()
-	select {
-	case <-p.exit:
-		logs.Warning("stop...")
-	}
-	return nil
-}
-
-func run() {
+func run() error {
 	routers.Init()
 	task := &file.Tunnel{
 		Mode: "webServer",
 	}
 	bridgePort, err := beego.AppConfig.Int("bridge_port")
 	if err != nil {
-		logs.Error("Getting bridge_port error", err)
-		os.Exit(0)
+		return fmt.Errorf("getting bridge_port: %w", err)
 	}
 
 	logs.Info("日志路径：" + *npsLogPath)
@@ -463,7 +473,22 @@ func run() {
 	if err != nil {
 		timeout = 60
 	}
+	db := file.GetDb()
+	var legacyIPs []string
+	if global := db.GetGlobal(); global != nil {
+		legacyIPs = global.BlackIpList
+	}
+	_, importStats, err := security.InitDefaultBlacklistService(legacyIPs)
+	if err != nil {
+		return fmt.Errorf("initialize blacklist service: %w", err)
+	}
+	if importStats.SkippedByMarker {
+		logs.Info("blacklist legacy import skipped: marker already present")
+	} else {
+		logs.Info("blacklist legacy import completed: total=%d imported=%d duplicates=%d invalid=%d", importStats.Total, importStats.Imported, importStats.Duplicates, importStats.Invalid)
+	}
 	go server.StartNewServer(bridgePort, task, beego.AppConfig.String("bridge_type"), timeout)
+	return nil
 }
 
 func initConfig(confDir string) {

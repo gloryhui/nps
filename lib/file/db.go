@@ -116,7 +116,6 @@ func (s *DbUtils) UpdateTask(t *Tunnel) error {
 }
 
 func (s *DbUtils) SaveGlobal(t *Glob) error {
-	t.RebuildBlackIPSet()
 	s.JsonDb.globalMu.Lock()
 	s.JsonDb.Global = t
 	s.JsonDb.globalMu.Unlock()
