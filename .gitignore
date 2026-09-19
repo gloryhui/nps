@@ -6,6 +6,11 @@ nps
 /nps.exe
 /npc.exe
 
+# Runtime SQLite state
+/conf/blacklist.db
+/conf/blacklist.db-wal
+/conf/blacklist.db-shm
+
 # Node.js / VuePress
 node_modules/
 yarn.lock
