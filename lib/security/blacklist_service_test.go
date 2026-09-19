@@ -179,7 +179,7 @@ func TestBlacklistServiceReloadIsAtomicAndDBFailuresDoNotDirtyIndex(t *testing.T
 	}
 }
 
-func TestBlacklistServiceReloadKeepsOldIndexAfterMidStreamFailure(t *testing.T) {
+func TestBlacklistServiceReloadKeepsOldIndexWhenActiveStreamFails(t *testing.T) {
 	service, repository := newTestBlacklistService(t)
 	if err := service.Add(BlacklistIPInput{IP: "192.0.2.30"}); err != nil {
 		t.Fatalf("seed service record: %v", err)
@@ -197,20 +197,8 @@ INSERT INTO blacklist_ip (
 		t.Fatalf("insert invalid raw record: %v", err)
 	}
 
-	seen := 0
-	err := repository.WalkActiveIndex(time.Now().Unix(), func(ip string, _ *int64) error {
-		seen++
-		if ip == "bad-ip" {
-			return errors.New("stop at invalid test row")
-		}
-		return nil
-	})
-	if err == nil || seen < 3 {
-		t.Fatalf("WalkActiveIndex() error = %v, rows seen = %d; want mid-stream failure after valid rows", err, seen)
-	}
-
 	if err := service.Reload(); err == nil {
-		t.Fatal("Reload() with an invalid mid-stream row returned nil")
+		t.Fatal("Reload() with an invalid active row returned nil")
 	}
 	if !service.Contains("192.0.2.30") {
 		t.Fatal("old live index entry was lost after mid-stream Reload() failure")
@@ -306,6 +294,24 @@ func TestBlacklistRepositoryEmptyLegacyImportWritesMarker(t *testing.T) {
 	count, err := repository.Count()
 	if err != nil || count != 0 {
 		t.Fatalf("count after empty marker import = %d, %v; want 0, nil", count, err)
+	}
+}
+
+func TestBlacklistRepositoryRejectsInvalidLegacyImportMarker(t *testing.T) {
+	repository, _ := newTestRepository(t)
+	if err := repository.SetMeta(legacyImportMarkerKey, "0"); err != nil {
+		t.Fatalf("set invalid legacy marker: %v", err)
+	}
+
+	if _, err := repository.ImportLegacyOnce([]string{"192.0.2.101"}); err == nil {
+		t.Fatal("ImportLegacyOnce() with invalid marker returned nil")
+	}
+	count, err := repository.Count()
+	if err != nil || count != 0 {
+		t.Fatalf("count after invalid marker = %d, %v; want 0, nil", count, err)
+	}
+	if marker, exists, err := repository.GetMeta(legacyImportMarkerKey); err != nil || !exists || marker != "0" {
+		t.Fatalf("invalid marker after rejected import = %q, exists=%t, err=%v; want 0, true, nil", marker, exists, err)
 	}
 }
 

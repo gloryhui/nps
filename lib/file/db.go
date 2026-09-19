@@ -321,6 +321,14 @@ func (s *DbUtils) GetGlobal() (c *Glob) {
 	return c
 }
 
+// GetGlobalLoadError reports a global.json read or parse failure.
+func (s *DbUtils) GetGlobalLoadError() error {
+	if s == nil || s.JsonDb == nil {
+		return nil
+	}
+	return s.JsonDb.GetGlobalLoadError()
+}
+
 func (s *DbUtils) GetClientIdByVkey(vkey string) (id int, err error) {
 	var exist bool
 	s.JsonDb.Clients.Range(func(key, value interface{}) bool {

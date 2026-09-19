@@ -474,9 +474,9 @@ func run() error {
 		timeout = 60
 	}
 	db := file.GetDb()
-	var legacyIPs []string
-	if global := db.GetGlobal(); global != nil {
-		legacyIPs = global.BlackIpList
+	legacyIPs, err := loadLegacyBlacklist(db)
+	if err != nil {
+		return err
 	}
 	_, importStats, err := security.InitDefaultBlacklistService(legacyIPs)
 	if err != nil {
@@ -489,6 +489,16 @@ func run() error {
 	}
 	go server.StartNewServer(bridgePort, task, beego.AppConfig.String("bridge_type"), timeout)
 	return nil
+}
+
+func loadLegacyBlacklist(db *file.DbUtils) ([]string, error) {
+	if err := db.GetGlobalLoadError(); err != nil {
+		return nil, fmt.Errorf("load legacy global config for blacklist migration: %w", err)
+	}
+	if global := db.GetGlobal(); global != nil {
+		return global.BlackIpList, nil
+	}
+	return nil, nil
 }
 
 func initConfig(confDir string) {

@@ -589,6 +589,10 @@ func (r *Repository) ImportLegacyOnce(rawIPs []string) (LegacyImportStats, error
 	var marker string
 	err = tx.QueryRow("SELECT value FROM blacklist_meta WHERE key = ?", legacyImportMarkerKey).Scan(&marker)
 	if err == nil {
+		if marker != "1" {
+			_ = tx.Rollback()
+			return stats, fmt.Errorf("invalid legacy blacklist import marker value %q", marker)
+		}
 		stats.SkippedByMarker = true
 		if err := tx.Commit(); err != nil {
 			return stats, fmt.Errorf("commit skipped legacy blacklist import: %w", err)

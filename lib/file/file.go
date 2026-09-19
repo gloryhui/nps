@@ -3,6 +3,7 @@ package file
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/astaxie/beego/logs"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ type JsonDb struct {
 	Clients          sync.Map
 	Global           *Glob
 	globalMu         sync.RWMutex
+	globalLoadErr    error
 	RunPath          string
 	ClientIncreaseId int32  //client increased id
 	TaskIncreaseId   int32  //task increased id
@@ -96,15 +98,49 @@ func (s *JsonDb) LoadHostFromJsonFile() {
 }
 
 func (s *JsonDb) LoadGlobalFromJsonFile() {
-	loadSyncMapFromFileWithSingleJson(s.GlobalFilePath, func(v string) {
-		post := new(Glob)
-		if json.Unmarshal([]byte(v), &post) != nil {
-			return
-		}
+	if !common.FileExists(s.GlobalFilePath) {
 		s.globalMu.Lock()
-		s.Global = post
+		s.Global = nil
+		s.globalLoadErr = nil
 		s.globalMu.Unlock()
-	})
+		return
+	}
+
+	b, err := common.ReadAllFromFile(s.GlobalFilePath)
+	if err != nil {
+		s.setGlobalLoadError(fmt.Errorf("read global config %q: %w", s.GlobalFilePath, err))
+		return
+	}
+
+	post := new(Glob)
+	if err := json.Unmarshal(b, post); err != nil {
+		s.setGlobalLoadError(fmt.Errorf("parse global config %q: %w", s.GlobalFilePath, err))
+		return
+	}
+
+	s.globalMu.Lock()
+	s.Global = post
+	s.globalLoadErr = nil
+	s.globalMu.Unlock()
+}
+
+func (s *JsonDb) setGlobalLoadError(err error) {
+	s.globalMu.Lock()
+	s.Global = nil
+	s.globalLoadErr = err
+	s.globalMu.Unlock()
+}
+
+// GetGlobalLoadError returns a copy of the global.json load error, if any.
+// The stored error is protected from callers mutating the JsonDb state.
+func (s *JsonDb) GetGlobalLoadError() error {
+	s.globalMu.RLock()
+	err := s.globalLoadErr
+	s.globalMu.RUnlock()
+	if err == nil {
+		return nil
+	}
+	return errors.New(err.Error())
 }
 
 func (s *JsonDb) GetClient(id int) (c *Client, err error) {
