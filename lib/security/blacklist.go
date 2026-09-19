@@ -124,15 +124,17 @@ CREATE INDEX IF NOT EXISTS idx_blacklist_created_at
     ON blacklist_ip(created_at DESC, id DESC);
 `
 
-// schemaV2 contains only the additions made by the version 1 -> 2
+// migrationV1ToV2SQL contains only the additions made by the version 1 -> 2
 // migration. Keep schemaV1 unchanged; historical migrations are immutable.
-const schemaV2 = `
+const migrationV1ToV2SQL = `
 CREATE TABLE IF NOT EXISTS blacklist_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
 `
+
+const activeBlacklistWhere = "enabled = 1 AND (expire_at IS NULL OR expire_at > ?)"
 
 const (
 	insertSQL = `
@@ -274,8 +276,8 @@ func migrateV0ToV1(tx *sql.Tx) error {
 }
 
 func migrateV1ToV2(tx *sql.Tx) error {
-	if _, err := tx.Exec(schemaV2); err != nil {
-		return fmt.Errorf("create schema v2: %w", err)
+	if _, err := tx.Exec(migrationV1ToV2SQL); err != nil {
+		return fmt.Errorf("apply migration v1 to v2: %w", err)
 	}
 	return nil
 }
@@ -515,15 +517,15 @@ func (r *Repository) BulkInsert(entries []BlacklistIP) error {
 	return nil
 }
 
-// WalkActive streams enabled, non-expired records directly from SQLite. The
+// WalkActiveIndex streams only the fields needed by the runtime index. The
 // callback is invoked once per row and records are not accumulated in a Go
 // slice, which keeps startup memory bounded for large blacklists.
-func (r *Repository) WalkActive(now int64, fn func(BlacklistIP) error) error {
+func (r *Repository) WalkActiveIndex(now int64, fn func(ip string, expireAt *int64) error) error {
 	if fn == nil {
 		return errors.New("blacklist active-row callback is nil")
 	}
 	rows, err := r.db.Query(
-		"SELECT "+selectColumns+" FROM blacklist_ip WHERE enabled = 1 AND (expire_at IS NULL OR expire_at > ?) ORDER BY created_at DESC, id DESC",
+		"SELECT ip, expire_at FROM blacklist_ip WHERE "+activeBlacklistWhere,
 		now,
 	)
 	if err != nil {
@@ -531,25 +533,31 @@ func (r *Repository) WalkActive(now int64, fn func(BlacklistIP) error) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		entry, err := scanBlacklistIP(rows)
-		if err != nil {
-			return fmt.Errorf("scan active blacklist IP: %w", err)
+		var ip string
+		var expireAt sql.NullInt64
+		if err := rows.Scan(&ip, &expireAt); err != nil {
+			return fmt.Errorf("scan active blacklist index row: %w", err)
 		}
-		if err := fn(entry); err != nil {
-			return fmt.Errorf("process active blacklist IP %q: %w", entry.IP, err)
+		var expiry *int64
+		if expireAt.Valid {
+			expiryValue := expireAt.Int64
+			expiry = &expiryValue
+		}
+		if err := fn(ip, expiry); err != nil {
+			return fmt.Errorf("process active blacklist IP %q: %w", ip, err)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate active blacklist IPs: %w", err)
+		return fmt.Errorf("iterate active blacklist index rows: %w", err)
 	}
 	return nil
 }
 
-// CountActive returns the number of records that WalkActive would stream.
+// CountActive returns the number of records that WalkActiveIndex would stream.
 func (r *Repository) CountActive(now int64) (int64, error) {
 	var count int64
 	if err := r.db.QueryRow(
-		"SELECT COUNT(*) FROM blacklist_ip WHERE enabled = 1 AND (expire_at IS NULL OR expire_at > ?)",
+		"SELECT COUNT(*) FROM blacklist_ip WHERE "+activeBlacklistWhere,
 		now,
 	).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count active blacklist IPs: %w", err)

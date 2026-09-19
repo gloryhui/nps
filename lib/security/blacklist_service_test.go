@@ -179,6 +179,47 @@ func TestBlacklistServiceReloadIsAtomicAndDBFailuresDoNotDirtyIndex(t *testing.T
 	}
 }
 
+func TestBlacklistServiceReloadKeepsOldIndexAfterMidStreamFailure(t *testing.T) {
+	service, repository := newTestBlacklistService(t)
+	if err := service.Add(BlacklistIPInput{IP: "192.0.2.30"}); err != nil {
+		t.Fatalf("seed service record: %v", err)
+	}
+	if err := repository.Add(BlacklistIPInput{IP: "192.0.2.31"}); err != nil {
+		t.Fatalf("seed second valid record: %v", err)
+	}
+	future := time.Now().Unix() + 100
+	if _, err := repository.db.Exec(`
+INSERT INTO blacklist_ip (
+    ip, source, reason, enabled, first_seen_at, last_seen_at,
+    expire_at, hit_count, created_at, updated_at
+) VALUES ('bad-ip', 'test', '', 1, 1, 1, ?, 0, 3, 3)
+`, future); err != nil {
+		t.Fatalf("insert invalid raw record: %v", err)
+	}
+
+	seen := 0
+	err := repository.WalkActiveIndex(time.Now().Unix(), func(ip string, _ *int64) error {
+		seen++
+		if ip == "bad-ip" {
+			return errors.New("stop at invalid test row")
+		}
+		return nil
+	})
+	if err == nil || seen < 3 {
+		t.Fatalf("WalkActiveIndex() error = %v, rows seen = %d; want mid-stream failure after valid rows", err, seen)
+	}
+
+	if err := service.Reload(); err == nil {
+		t.Fatal("Reload() with an invalid mid-stream row returned nil")
+	}
+	if !service.Contains("192.0.2.30") {
+		t.Fatal("old live index entry was lost after mid-stream Reload() failure")
+	}
+	if service.Contains("192.0.2.31") {
+		t.Fatal("partially loaded entry was published after mid-stream Reload() failure")
+	}
+}
+
 func TestBlacklistRepositoryImportsLegacyGlobalBlacklistOnce(t *testing.T) {
 	repository, dbPath := newTestRepository(t)
 	rawIPs := []string{
@@ -239,6 +280,123 @@ func TestBlacklistRepositoryImportsLegacyGlobalBlacklistOnce(t *testing.T) {
 	count, err = reopened.Count()
 	if err != nil || count != 0 {
 		t.Fatalf("count after marker-protected restart = %d, %v; want 0, nil", count, err)
+	}
+}
+
+func TestBlacklistRepositoryEmptyLegacyImportWritesMarker(t *testing.T) {
+	repository, _ := newTestRepository(t)
+	first, err := repository.ImportLegacyOnce(nil)
+	if err != nil {
+		t.Fatalf("empty ImportLegacyOnce() error = %v", err)
+	}
+	if first.Imported != 0 || first.Invalid != 0 || first.SkippedByMarker {
+		t.Fatalf("empty import stats = %+v, want no rows, no invalid values, and no skip", first)
+	}
+	if marker, exists, err := repository.GetMeta(legacyImportMarkerKey); err != nil || !exists || marker != "1" {
+		t.Fatalf("empty import marker = %q, exists=%t, err=%v; want 1, true, nil", marker, exists, err)
+	}
+
+	second, err := repository.ImportLegacyOnce([]string{"192.0.2.100"})
+	if err != nil {
+		t.Fatalf("second ImportLegacyOnce() error = %v", err)
+	}
+	if !second.SkippedByMarker {
+		t.Fatalf("second empty-import stats = %+v, want skipped by marker", second)
+	}
+	count, err := repository.Count()
+	if err != nil || count != 0 {
+		t.Fatalf("count after empty marker import = %d, %v; want 0, nil", count, err)
+	}
+}
+
+func TestBlacklistRepositoryLegacyImportMarkerFailureRollsBackRows(t *testing.T) {
+	repository, _ := newTestRepository(t)
+	if _, err := repository.db.Exec(`
+CREATE TRIGGER fail_legacy_marker
+BEFORE INSERT ON blacklist_meta
+WHEN NEW.key = 'legacy_global_blacklist_imported'
+BEGIN
+    SELECT RAISE(FAIL, 'forced marker failure');
+END
+`); err != nil {
+		t.Fatalf("create marker failure trigger: %v", err)
+	}
+
+	if _, err := repository.ImportLegacyOnce([]string{"192.0.2.110", "192.0.2.111"}); err == nil {
+		t.Fatal("ImportLegacyOnce() with marker failure returned nil")
+	}
+	count, err := repository.Count()
+	if err != nil || count != 0 {
+		t.Fatalf("count after marker failure = %d, %v; want 0, nil", count, err)
+	}
+	if marker, exists, err := repository.GetMeta(legacyImportMarkerKey); err != nil || exists || marker != "" {
+		t.Fatalf("marker after marker failure = %q, exists=%t, err=%v; want empty, false, nil", marker, exists, err)
+	}
+}
+
+func TestBlacklistRepositoryLegacyImportPreservesExistingMetadata(t *testing.T) {
+	repository, _ := newTestRepository(t)
+	expireAt := int64(1_800_000_000)
+	if err := repository.Add(BlacklistIPInput{
+		IP:       "192.0.2.120",
+		Source:   "manual",
+		Reason:   "keep-me",
+		ExpireAt: &expireAt,
+	}); err != nil {
+		t.Fatalf("seed existing record: %v", err)
+	}
+
+	stats, err := repository.ImportLegacyOnce([]string{"192.0.2.120"})
+	if err != nil {
+		t.Fatalf("ImportLegacyOnce() existing record error = %v", err)
+	}
+	if stats.Imported != 0 || stats.Duplicates != 1 {
+		t.Fatalf("existing record import stats = %+v, want imported=0 duplicates=1", stats)
+	}
+	got, err := repository.GetByIP("192.0.2.120")
+	if err != nil {
+		t.Fatalf("read existing record: %v", err)
+	}
+	if got.Source != "manual" || got.Reason != "keep-me" || got.ExpireAt == nil || *got.ExpireAt != expireAt {
+		t.Fatalf("existing metadata changed by import: %+v", got)
+	}
+}
+
+func TestBlacklistServiceEnableExpiredRecordDoesNotPublish(t *testing.T) {
+	service, repository := newTestBlacklistService(t)
+	disabled := false
+	expired := time.Now().Unix() - 1
+	if err := repository.Add(BlacklistIPInput{
+		IP:       "198.51.100.90",
+		Enabled:  &disabled,
+		ExpireAt: &expired,
+	}); err != nil {
+		t.Fatalf("seed disabled expired record: %v", err)
+	}
+	if err := service.Reload(); err != nil {
+		t.Fatalf("Reload() disabled expired record error = %v", err)
+	}
+	if err := service.Enable("198.51.100.90"); err != nil {
+		t.Fatalf("Enable() expired record error = %v", err)
+	}
+	got, err := repository.GetByIP("198.51.100.90")
+	if err != nil || !got.Enabled {
+		t.Fatalf("expired record after Enable() = %+v, err=%v; want enabled in SQLite", got, err)
+	}
+	if service.Contains("198.51.100.90") {
+		t.Fatal("expired record entered runtime index after Enable()")
+	}
+}
+
+func TestBlacklistServiceCanonicalizesIPv4MappedIPv6(t *testing.T) {
+	service, _ := newTestBlacklistService(t)
+	if err := service.Add(BlacklistIPInput{IP: "::ffff:192.0.2.10"}); err != nil {
+		t.Fatalf("Add() mapped IPv4 error = %v", err)
+	}
+	for _, rawIP := range []string{"192.0.2.10", "::ffff:192.0.2.10", "192.0.2.10:443"} {
+		if !service.Contains(rawIP) {
+			t.Errorf("Contains(%q) = false, want true", rawIP)
+		}
 	}
 }
 

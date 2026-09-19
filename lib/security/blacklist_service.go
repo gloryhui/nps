@@ -53,14 +53,26 @@ func (s *BlacklistService) Reload() error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	newIndex := make(map[netip.Addr]int64)
 	now := time.Now().Unix()
-	if err := s.repo.WalkActive(now, func(entry BlacklistIP) error {
-		addr, err := ParseIPAddr(entry.IP)
+	count, err := s.repo.CountActive(now)
+	if err != nil {
+		return err
+	}
+	if count < 0 {
+		return errors.New("blacklist active row count is negative")
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if count > maxInt {
+		return fmt.Errorf("blacklist active row count %d exceeds map capacity", count)
+	}
+
+	newIndex := make(map[netip.Addr]int64, int(count))
+	if err := s.repo.WalkActiveIndex(now, func(ip string, expireAt *int64) error {
+		addr, err := ParseIPAddr(ip)
 		if err != nil {
 			return err
 		}
-		newIndex[addr] = expireValue(entry.ExpireAt)
+		newIndex[addr] = expireValue(expireAt)
 		return nil
 	}); err != nil {
 		return err
