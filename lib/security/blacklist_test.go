@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -49,6 +50,13 @@ func TestBlacklistRepositoryInitializesIdempotently(t *testing.T) {
 	if busyTimeout != "5000" {
 		t.Fatalf("busy_timeout = %q, want 5000", busyTimeout)
 	}
+	var schemaVersion int64
+	if err := repository.db.QueryRow("PRAGMA user_version").Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if schemaVersion != currentSchemaVersion {
+		t.Fatalf("user_version = %d, want %d", schemaVersion, currentSchemaVersion)
+	}
 
 	var tableCount, indexCount int
 	if err := repository.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'blacklist_ip'").Scan(&tableCount); err != nil {
@@ -60,7 +68,17 @@ func TestBlacklistRepositoryInitializesIdempotently(t *testing.T) {
 	if tableCount != 1 || indexCount != 4 {
 		t.Fatalf("schema objects = table %d, indexes %d; want table 1, indexes 4", tableCount, indexCount)
 	}
+	var createdAtIndexSQL string
+	if err := repository.db.QueryRow("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_blacklist_created_at'").Scan(&createdAtIndexSQL); err != nil {
+		t.Fatalf("read created-at index: %v", err)
+	}
+	if !strings.Contains(createdAtIndexSQL, "created_at DESC, id DESC") {
+		t.Fatalf("created-at index SQL = %q, want created_at/id ordering", createdAtIndexSQL)
+	}
 
+	if err := repository.Add(BlacklistIPInput{IP: "192.0.2.200", Reason: "survives restart"}); err != nil {
+		t.Fatalf("Add() before restart error = %v", err)
+	}
 	if err := repository.Close(); err != nil {
 		t.Fatalf("first Close() error = %v", err)
 	}
@@ -68,15 +86,84 @@ func TestBlacklistRepositoryInitializesIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen initialized database: %v", err)
 	}
+	if err := reopened.db.QueryRow("PRAGMA user_version").Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version after restart: %v", err)
+	}
+	if schemaVersion != currentSchemaVersion {
+		t.Fatalf("user_version after restart = %d, want %d", schemaVersion, currentSchemaVersion)
+	}
+	if _, err := reopened.GetByIP("192.0.2.200"); err != nil {
+		t.Fatalf("data after restart: %v", err)
+	}
 	if err := reopened.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+func TestBlacklistRepositoryMigratesVersionZeroWithoutLosingData(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "blacklist.db")
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open version zero database: %v", err)
+	}
+	rawDB.SetMaxOpenConns(1)
+	oldSchema := `
+CREATE TABLE blacklist_ip (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    reason TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    expire_at INTEGER DEFAULT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX uk_blacklist_ip ON blacklist_ip(ip);
+CREATE INDEX idx_blacklist_source ON blacklist_ip(source);
+CREATE INDEX idx_blacklist_expire_at ON blacklist_ip(expire_at);
+CREATE INDEX idx_blacklist_created_at ON blacklist_ip(created_at DESC);
+INSERT INTO blacklist_ip (ip, first_seen_at, last_seen_at, created_at, updated_at)
+VALUES ('192.0.2.240', 1, 1, 1, 1);
+`
+	if _, err := rawDB.Exec(oldSchema); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("create version zero database: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close version zero database: %v", err)
+	}
+
+	repository, err := NewBlacklistRepository(dbPath)
+	if err != nil {
+		t.Fatalf("migrate version zero database: %v", err)
+	}
+	defer repository.Close()
+	var version int64
+	if err := repository.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read migrated version: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("migrated user_version = %d, want %d", version, currentSchemaVersion)
+	}
+	if _, err := repository.GetByIP("192.0.2.240"); err != nil {
+		t.Fatalf("migrated record not preserved: %v", err)
+	}
+	var indexSQL string
+	if err := repository.db.QueryRow("SELECT sql FROM sqlite_master WHERE name = 'idx_blacklist_created_at'").Scan(&indexSQL); err != nil {
+		t.Fatalf("read migrated index: %v", err)
+	}
+	if !strings.Contains(indexSQL, "created_at DESC, id DESC") {
+		t.Fatalf("migrated index SQL = %q, want created_at/id ordering", indexSQL)
 	}
 }
 
 func TestBlacklistRepositoryCRUDAndMetadata(t *testing.T) {
 	repository, _ := newTestRepository(t)
 	expireAt := int64(1_800_000_000)
-	entry := BlacklistIP{
+	entry := BlacklistIPInput{
 		IP:          " 192.0.2.10:54321 ",
 		Source:      "manual",
 		Reason:      "test reason",
@@ -138,9 +225,9 @@ func TestBlacklistRepositoryCRUDAndMetadata(t *testing.T) {
 func TestBlacklistRepositoryListAndPageUseDatabasePagination(t *testing.T) {
 	repository, _ := newTestRepository(t)
 	entries := []BlacklistIP{
-		{IP: "192.0.2.1", Source: "manual", Reason: "one", CreatedAt: 1},
-		{IP: "192.0.2.2", Source: "auto", Reason: "two", CreatedAt: 2},
-		{IP: "192.0.2.3", Source: "manual", Reason: "three", CreatedAt: 3},
+		{IP: "192.0.2.1", Source: "manual", Reason: "one", Enabled: true, CreatedAt: 1},
+		{IP: "192.0.2.2", Source: "auto", Reason: "two", Enabled: true, CreatedAt: 2},
+		{IP: "192.0.2.3", Source: "manual", Reason: "three", Enabled: true, CreatedAt: 3},
 	}
 	if err := repository.BulkInsert(entries); err != nil {
 		t.Fatalf("BulkInsert() error = %v", err)
@@ -175,10 +262,10 @@ func TestBlacklistRepositoryListAndPageUseDatabasePagination(t *testing.T) {
 func TestBlacklistRepositoryBulkInsertSkipsDuplicatesInOneBatch(t *testing.T) {
 	repository, _ := newTestRepository(t)
 	entries := []BlacklistIP{
-		{IP: "192.0.2.10"},
-		{IP: " 192.0.2.10:443 "},
-		{IP: "[2001:db8::10]:443", Source: "manual", Reason: "ipv6"},
-		{IP: "2001:0db8:0:0:0:0:0:10", Source: "auto"},
+		{IP: "192.0.2.10", Enabled: true},
+		{IP: " 192.0.2.10:443 ", Enabled: true},
+		{IP: "[2001:db8::10]:443", Source: "manual", Reason: "ipv6", Enabled: true},
+		{IP: "2001:0db8:0:0:0:0:0:10", Source: "auto", Enabled: true},
 	}
 	if err := repository.BulkInsert(entries); err != nil {
 		t.Fatalf("BulkInsert() error = %v", err)
@@ -228,7 +315,7 @@ func TestNormalizeIP(t *testing.T) {
 
 func TestBlacklistRepositoryPersistsAfterCloseAndReopen(t *testing.T) {
 	repository, dbPath := newTestRepository(t)
-	if err := repository.Add(BlacklistIP{IP: "203.0.113.7", Source: "manual", Reason: "persist"}); err != nil {
+	if err := repository.Add(BlacklistIPInput{IP: "203.0.113.7", Source: "manual", Reason: "persist"}); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
 	if err := repository.Close(); err != nil {
@@ -251,13 +338,62 @@ func TestBlacklistRepositoryPersistsAfterCloseAndReopen(t *testing.T) {
 
 func TestBlacklistRepositoryRejectsInvalidBulkInputWithoutPartialInsert(t *testing.T) {
 	repository, _ := newTestRepository(t)
-	err := repository.BulkInsert([]BlacklistIP{{IP: "192.0.2.30"}, {IP: "invalid"}})
+	err := repository.BulkInsert([]BlacklistIP{{IP: "192.0.2.30", Enabled: true}, {IP: "invalid", Enabled: true}})
 	if !errors.Is(err, ErrInvalidIP) {
 		t.Fatalf("BulkInsert() error = %v, want ErrInvalidIP", err)
 	}
 	count, countErr := repository.Count()
 	if countErr != nil || count != 0 {
 		t.Fatalf("Count() after rejected bulk = %d, %v; want 0, nil", count, countErr)
+	}
+}
+
+func TestBlacklistRepositoryBulkInsertPreservesDisabledState(t *testing.T) {
+	repository, _ := newTestRepository(t)
+	if err := repository.BulkInsert([]BlacklistIP{{IP: "198.51.100.20", Enabled: false}}); err != nil {
+		t.Fatalf("BulkInsert() error = %v", err)
+	}
+
+	got, err := repository.GetByIP("198.51.100.20")
+	if err != nil {
+		t.Fatalf("GetByIP() after disabled bulk insert error = %v", err)
+	}
+	if got.Enabled {
+		t.Fatalf("BulkInsert() enabled = true, want disabled record")
+	}
+	if err := repository.Enable("198.51.100.20"); err != nil {
+		t.Fatalf("Enable() error = %v", err)
+	}
+	got, err = repository.GetByIP("198.51.100.20")
+	if err != nil || !got.Enabled {
+		t.Fatalf("after Enable(), got = %+v, err = %v; want enabled", got, err)
+	}
+	if err := repository.Disable("198.51.100.20"); err != nil {
+		t.Fatalf("Disable() error = %v", err)
+	}
+	got, err = repository.GetByIP("198.51.100.20")
+	if err != nil || got.Enabled {
+		t.Fatalf("after Disable(), got = %+v, err = %v; want disabled", got, err)
+	}
+}
+
+func TestBlacklistRepositoryAddDefaultsEnabledButAcceptsExplicitDisabled(t *testing.T) {
+	repository, _ := newTestRepository(t)
+	if err := repository.Add(BlacklistIPInput{IP: "198.51.100.21"}); err != nil {
+		t.Fatalf("default Add() error = %v", err)
+	}
+	defaultEntry, err := repository.GetByIP("198.51.100.21")
+	if err != nil || !defaultEntry.Enabled {
+		t.Fatalf("default Add() entry = %+v, err = %v; want enabled", defaultEntry, err)
+	}
+
+	disabled := false
+	if err := repository.Add(BlacklistIPInput{IP: "198.51.100.22", Enabled: &disabled}); err != nil {
+		t.Fatalf("explicit disabled Add() error = %v", err)
+	}
+	explicitEntry, err := repository.GetByIP("198.51.100.22")
+	if err != nil || explicitEntry.Enabled {
+		t.Fatalf("explicit disabled Add() entry = %+v, err = %v; want disabled", explicitEntry, err)
 	}
 }
 

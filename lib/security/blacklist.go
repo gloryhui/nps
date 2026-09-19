@@ -20,6 +20,7 @@ import (
 const (
 	defaultBlacklistSource = "manual"
 	defaultPageSize        = 50
+	currentSchemaVersion   = 1
 )
 
 var (
@@ -44,6 +45,22 @@ type BlacklistIP struct {
 	Source      string
 	Reason      string
 	Enabled     bool
+	FirstSeenAt int64
+	LastSeenAt  int64
+	ExpireAt    *int64
+	HitCount    int64
+	CreatedAt   int64
+	UpdatedAt   int64
+}
+
+// BlacklistIPInput contains the fields accepted by Add. Enabled is a
+// pointer so callers can distinguish an omitted state (default: enabled)
+// from an explicit disabled state.
+type BlacklistIPInput struct {
+	IP          string
+	Source      string
+	Reason      string
+	Enabled     *bool
 	FirstSeenAt int64
 	LastSeenAt  int64
 	ExpireAt    *int64
@@ -100,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_blacklist_source
 CREATE INDEX IF NOT EXISTS idx_blacklist_expire_at
     ON blacklist_ip(expire_at);
 CREATE INDEX IF NOT EXISTS idx_blacklist_created_at
-    ON blacklist_ip(created_at DESC);
+    ON blacklist_ip(created_at DESC, id DESC);
 `
 
 const (
@@ -178,8 +195,55 @@ func initializeDatabase(db *sql.DB) error {
 			return fmt.Errorf("%s: %w", pragma, err)
 		}
 	}
-	if _, err := db.Exec(schema); err != nil {
-		return fmt.Errorf("create blacklist schema: %w", err)
+	return migrateDatabase(db)
+}
+
+func migrateDatabase(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin blacklist schema migration: %w", err)
+	}
+
+	var version int64
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("read blacklist schema version: %w", err)
+	}
+	if version > currentSchemaVersion {
+		_ = tx.Rollback()
+		return fmt.Errorf("unsupported blacklist schema version %d (current version %d)", version, currentSchemaVersion)
+	}
+
+	for version < currentSchemaVersion {
+		switch version {
+		case 0:
+			if _, err := tx.Exec(schema); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("migrate blacklist schema 0 to 1: %w", err)
+			}
+			// Recreate this index so databases created by the previous
+			// repository revision also receive the id tie-breaker.
+			if _, err := tx.Exec("DROP INDEX IF EXISTS idx_blacklist_created_at"); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("replace blacklist created-at index: %w", err)
+			}
+			if _, err := tx.Exec("CREATE INDEX idx_blacklist_created_at ON blacklist_ip(created_at DESC, id DESC)"); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("create blacklist created-at index: %w", err)
+			}
+			version = 1
+		default:
+			_ = tx.Rollback()
+			return fmt.Errorf("no migration for blacklist schema version %d", version)
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version)); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("set blacklist schema version %d: %w", version, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit blacklist schema migration: %w", err)
 	}
 	return nil
 }
@@ -200,11 +264,11 @@ func (r *Repository) Close() error {
 	return r.closeErr
 }
 
-// Add inserts an IP. New blacklist entries are enabled by default, as
-// required by the schema; Disable can be used when an inactive record is
-// needed. IP values are normalized before they become the unique key.
-func (r *Repository) Add(entry BlacklistIP) error {
-	normalized, err := prepareEntry(entry, true)
+// Add inserts an IP. If input.Enabled is nil, the new record is enabled by
+// default; a non-nil pointer preserves the caller's explicit state. IP
+// values are normalized before they become the unique key.
+func (r *Repository) Add(input BlacklistIPInput) error {
+	normalized, err := prepareEntry(inputToEntry(input))
 	if err != nil {
 		return err
 	}
@@ -377,19 +441,13 @@ func (r *Repository) Page(page, pageSize int) (PageResult, error) {
 }
 
 // BulkInsert inserts all entries in one transaction using one prepared
-// statement. Duplicate normalized IPs are skipped so a duplicate cannot
-// abort a large historical import; other database errors abort the entire
-// transaction.
+// statement. Each entry is normalized immediately before its Exec, so the
+// repository does not allocate an input-sized copy. Duplicate normalized IPs
+// are skipped so a duplicate cannot abort a large historical import. Each
+// entry's Enabled value is preserved; other database errors and invalid IPs
+// abort the entire transaction.
 func (r *Repository) BulkInsert(entries []BlacklistIP) error {
-	prepared := make([]BlacklistIP, len(entries))
-	for i, entry := range entries {
-		var err error
-		prepared[i], err = prepareEntry(entry, true)
-		if err != nil {
-			return fmt.Errorf("prepare blacklist IP at index %d: %w", i, err)
-		}
-	}
-	if len(prepared) == 0 {
+	if len(entries) == 0 {
 		return nil
 	}
 
@@ -402,11 +460,17 @@ func (r *Repository) BulkInsert(entries []BlacklistIP) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("prepare blacklist bulk insert: %w", err)
 	}
-	for _, entry := range prepared {
-		if _, err := stmt.Exec(entryArgs(entry)...); err != nil {
+	for i, entry := range entries {
+		normalized, err := prepareEntry(entry)
+		if err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()
-			return fmt.Errorf("bulk insert blacklist IP %q: %w", entry.IP, err)
+			return fmt.Errorf("prepare blacklist IP at index %d: %w", i, err)
+		}
+		if _, err := stmt.Exec(entryArgs(normalized)...); err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return fmt.Errorf("bulk insert blacklist IP %q: %w", normalized.IP, err)
 		}
 	}
 	if err := stmt.Close(); err != nil {
@@ -443,7 +507,26 @@ func canonicalAddr(addr netip.Addr) string {
 	return addr.Unmap().WithZone("").String()
 }
 
-func prepareEntry(entry BlacklistIP, enableByDefault bool) (BlacklistIP, error) {
+func inputToEntry(input BlacklistIPInput) BlacklistIP {
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	return BlacklistIP{
+		IP:          input.IP,
+		Source:      input.Source,
+		Reason:      input.Reason,
+		Enabled:     enabled,
+		FirstSeenAt: input.FirstSeenAt,
+		LastSeenAt:  input.LastSeenAt,
+		ExpireAt:    input.ExpireAt,
+		HitCount:    input.HitCount,
+		CreatedAt:   input.CreatedAt,
+		UpdatedAt:   input.UpdatedAt,
+	}
+}
+
+func prepareEntry(entry BlacklistIP) (BlacklistIP, error) {
 	normalized, err := NormalizeIP(entry.IP)
 	if err != nil {
 		return BlacklistIP{}, err
@@ -452,9 +535,6 @@ func prepareEntry(entry BlacklistIP, enableByDefault bool) (BlacklistIP, error) 
 	entry.Source = strings.TrimSpace(entry.Source)
 	if entry.Source == "" {
 		entry.Source = defaultBlacklistSource
-	}
-	if enableByDefault {
-		entry.Enabled = true
 	}
 	now := time.Now().Unix()
 	if entry.FirstSeenAt == 0 {
