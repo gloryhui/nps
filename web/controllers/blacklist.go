@@ -61,6 +61,19 @@ func (s *BlacklistController) Prepare() {
 	}
 }
 
+// Index renders the administrator-only management page. The page itself does
+// not load blacklist rows; the browser requests stats and paginated rows from
+// the API after rendering.
+func (s *BlacklistController) Index() {
+	if s.Ctx.Request.Method != http.MethodGet {
+		s.apiError(http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
+		return
+	}
+	s.Data["menu"] = "blacklist"
+	s.SetInfo("blacklist")
+	s.display("blacklist/index")
+}
+
 func (s *BlacklistController) List() {
 	if !s.requireReadMethod() {
 		return

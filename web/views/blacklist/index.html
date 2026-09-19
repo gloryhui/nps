@@ -1,0 +1,427 @@
+<div class="wrapper wrapper-content animated fadeInRight">
+    <div class="row">
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-total"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_total">0</h1></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-active"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_active">0</h1></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-enabled"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_enabled">0</h1></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-disabled"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_disabled">0</h1></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-manual"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_manual">0</h1></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-import"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_import">0</h1></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-auto"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_auto">0</h1></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-4 col-sm-6">
+            <div class="ibox">
+                <div class="ibox-title"><h5 langtag="word-expired"></h5></div>
+                <div class="ibox-content"><h1 class="no-margins" id="blacklist_stat_expired">0</h1></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-12">
+            <div class="ibox">
+                <div class="ibox-title">
+                    <h5 langtag="word-blacklistmanagement"></h5>
+                </div>
+                <div class="ibox-content">
+                    <div class="form-inline m-b-sm" id="blacklist_toolbar">
+                        <input id="blacklist_ip_filter" class="form-control m-r-sm" type="text"
+                               placeholder="" langtag="info-exactip">
+                        <select id="blacklist_source_filter" class="form-control m-r-sm">
+                            <option value="" langtag="word-all"></option>
+                            <option value="manual" langtag="word-manual"></option>
+                            <option value="import" langtag="word-import"></option>
+                            <option value="auto" langtag="word-auto"></option>
+                        </select>
+                        <select id="blacklist_enabled_filter" class="form-control m-r-sm">
+                            <option value="" langtag="word-all"></option>
+                            <option value="true" langtag="word-enabled"></option>
+                            <option value="false" langtag="word-disabled"></option>
+                        </select>
+                        <button id="blacklist_search" type="button" class="btn btn-primary m-r-sm">
+                            <i class="fa fa-search"></i> <span langtag="word-search"></span>
+                        </button>
+                        <button id="blacklist_reset" type="button" class="btn btn-default m-r-sm">
+                            <i class="fa fa-undo"></i> <span langtag="word-reset"></span>
+                        </button>
+                        <button id="blacklist_add" type="button" class="btn btn-success">
+                            <i class="fa fa-plus"></i> <span langtag="word-addblacklist"></span>
+                        </button>
+                    </div>
+                    <table id="blacklist_table" class="table-striped table-hover"></table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="blacklist_add_modal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="blacklist_add_form">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">&times;</button>
+                    <h4 class="modal-title" langtag="word-addblacklist"></h4>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="blacklist_add_ip" langtag="word-ip"></label>
+                        <input id="blacklist_add_ip" name="ip" class="form-control" type="text" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="blacklist_add_reason" langtag="word-reason"></label>
+                        <textarea id="blacklist_add_reason" name="reason" class="form-control" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="blacklist_add_expire" langtag="word-expiretime"></label>
+                        <input id="blacklist_add_expire" name="expire_at" class="form-control blacklist-expire" type="text"
+                               placeholder="" langtag="info-blacklistexpire">
+                    </div>
+                    <div class="checkbox">
+                        <label><input id="blacklist_add_enabled" name="enabled" type="checkbox" checked>
+                            <span langtag="word-enabled"></span></label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal" langtag="word-cancel"></button>
+                    <button type="submit" class="btn btn-primary" langtag="word-save"></button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="blacklist_detail_modal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">&times;</button>
+                <h4 class="modal-title" langtag="word-detail"></h4>
+            </div>
+            <div class="modal-body">
+                <dl class="dl-horizontal">
+                    <dt langtag="word-id"></dt><dd id="blacklist_detail_id"></dd>
+                    <dt langtag="word-ip"></dt><dd id="blacklist_detail_ip"></dd>
+                    <dt langtag="word-source"></dt><dd id="blacklist_detail_source"></dd>
+                    <dt langtag="word-reason"></dt><dd id="blacklist_detail_reason"></dd>
+                    <dt langtag="word-enabled"></dt><dd id="blacklist_detail_enabled"></dd>
+                    <dt langtag="word-active"></dt><dd id="blacklist_detail_active"></dd>
+                    <dt langtag="word-firstseen"></dt><dd id="blacklist_detail_first_seen_at"></dd>
+                    <dt langtag="word-lastseen"></dt><dd id="blacklist_detail_last_seen_at"></dd>
+                    <dt langtag="word-expiretime"></dt><dd id="blacklist_detail_expire_at"></dd>
+                    <dt langtag="word-hitcount"></dt><dd id="blacklist_detail_hit_count"></dd>
+                    <dt langtag="word-createtime"></dt><dd id="blacklist_detail_created_at"></dd>
+                    <dt langtag="word-updatedtime"></dt><dd id="blacklist_detail_updated_at"></dd>
+                </dl>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal" langtag="word-close"></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    var blacklistBase = window.nps.web_base_url || '';
+
+    function blacklistUrl(path) {
+        return blacklistBase + path;
+    }
+
+    function blacklistText(key, fallback) {
+        var content = window.languages && window.languages.content;
+        var value = content && content[key.toLowerCase()];
+        if ($.isArray(value)) value = value[0];
+        if (value && typeof value === 'object') {
+            value = value[window.languages.current] || value[window.languages.default];
+        }
+        return value || fallback;
+    }
+
+    function escapeHtml(value) {
+        return $('<div>').text(value == null ? '' : String(value)).html();
+    }
+
+    function showBlacklistError(xhr) {
+        var payload = xhr && xhr.responseJSON;
+        var message = payload && payload.msg;
+        if (!message) message = blacklistText('info-requestfailed', 'Request failed');
+        toastr.error(escapeHtml(message));
+    }
+
+    function blacklistRequest(options) {
+        var request = $.ajax($.extend({dataType: 'json'}, options));
+        request.fail(showBlacklistError);
+        return request;
+    }
+
+    function responseIsSuccess(response) {
+        if (response && response.status === 0) {
+            showBlacklistError({responseJSON: response});
+            return false;
+        }
+        return true;
+    }
+
+    function pad(value) {
+        return value < 10 ? '0' + value : String(value);
+    }
+
+    function formatUnixTime(value) {
+        if (value === null || value === undefined || value === '') return '';
+        var date = new Date(Number(value) * 1000);
+        if (isNaN(date.getTime())) return '-';
+        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+            ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+    }
+
+    function formatExpireTime(value) {
+        if (value === null || value === undefined || value === '') {
+            return blacklistText('word-permanent', 'Permanent');
+        }
+        var formatted = formatUnixTime(value);
+        if (Number(value) <= Math.floor(Date.now() / 1000)) {
+            return formatted + ' (' + blacklistText('word-expired', 'Expired') + ')';
+        }
+        return formatted;
+    }
+
+    window.formatUnixTime = formatUnixTime;
+
+    function statusBadge(enabled, labelKey, fallback, className) {
+        return '<span class="badge ' + className + '">' +
+            escapeHtml(blacklistText(labelKey, fallback)) + '</span>';
+    }
+
+    function enabledFormatter(value) {
+        return statusBadge(value, value ? 'word-enabled' : 'word-disabled', value ? 'Enabled' : 'Disabled',
+            value ? 'badge-primary' : 'badge-secondary');
+    }
+
+    function activeFormatter(value, row) {
+        var expired = row.expire_at !== null && row.expire_at !== undefined &&
+            Number(row.expire_at) <= Math.floor(Date.now() / 1000);
+        if (value) return statusBadge(true, 'word-active', 'Active', 'badge-primary');
+        return statusBadge(false, expired ? 'word-expired' : 'word-inactive', expired ? 'Expired' : 'Inactive',
+            'badge-secondary');
+    }
+
+    function sourceFormatter(value) {
+        var key = 'word-' + String(value || '').toLowerCase();
+        return '<span class="badge badge-info">' + escapeHtml(blacklistText(key, value || '-')) + '</span>';
+    }
+
+    function actionFormatter() {
+        return '<div class="btn-group">' +
+            '<button type="button" class="btn btn-xs btn-outline btn-info blacklist-detail" title="' +
+                escapeHtml(blacklistText('word-detail', 'Detail')) + '"><i class="fa fa-eye"></i></button>' +
+            '<button type="button" class="btn btn-xs btn-outline btn-warning blacklist-toggle"></button>' +
+            '<button type="button" class="btn btn-xs btn-outline btn-danger blacklist-delete" title="' +
+                escapeHtml(blacklistText('word-delete', 'Delete')) + '"><i class="fa fa-trash"></i></button>' +
+            '</div>';
+    }
+
+    function setDetail(id, value) {
+        $('#blacklist_detail_' + id).text(value == null ? '' : value);
+    }
+
+    function showDetail(row) {
+        blacklistRequest({
+            type: 'GET',
+            url: blacklistUrl('/blacklist/detail'),
+            data: {ip: row.ip}
+        }).done(function (response) {
+            if (!responseIsSuccess(response)) return;
+            var item = response.data || {};
+            setDetail('id', item.id);
+            setDetail('ip', item.ip);
+            setDetail('source', item.source);
+            setDetail('reason', item.reason);
+            setDetail('enabled', item.enabled ? blacklistText('word-enabled', 'Enabled') : blacklistText('word-disabled', 'Disabled'));
+            setDetail('active', item.active ? blacklistText('word-active', 'Active') :
+                (item.expire_at !== null && Number(item.expire_at) <= Math.floor(Date.now() / 1000) ?
+                    blacklistText('word-expired', 'Expired') : blacklistText('word-inactive', 'Inactive')));
+            setDetail('first_seen_at', formatUnixTime(item.first_seen_at));
+            setDetail('last_seen_at', formatUnixTime(item.last_seen_at));
+            setDetail('expire_at', formatExpireTime(item.expire_at));
+            setDetail('hit_count', item.hit_count);
+            setDetail('created_at', formatUnixTime(item.created_at));
+            setDetail('updated_at', formatUnixTime(item.updated_at));
+            $('#blacklist_detail_modal').modal('show');
+        });
+    }
+
+    function refreshStats() {
+        blacklistRequest({type: 'GET', url: blacklistUrl('/blacklist/stats')}).done(function (response) {
+            if (!responseIsSuccess(response)) return;
+            var data = response.data || {};
+            ['total', 'active', 'enabled', 'disabled', 'manual', 'import', 'auto', 'expired'].forEach(function (key) {
+                $('#blacklist_stat_' + key).text(data[key] == null ? 0 : data[key]);
+            });
+        });
+    }
+
+    function refreshAfterMutation() {
+        refreshStats();
+        var table = $('#blacklist_table');
+        var options = table.bootstrapTable('getOptions');
+        var rows = table.bootstrapTable('getData');
+        if (options.pageNumber > 1 && rows.length === 1) {
+            table.bootstrapTable('prevPage');
+        } else {
+            table.bootstrapTable('refresh');
+        }
+    }
+
+    window.blacklistOperateEvents = {
+        'click .blacklist-detail': function (event, value, row) {
+            event.preventDefault();
+            showDetail(row);
+        },
+        'click .blacklist-toggle': function (event, value, row) {
+            event.preventDefault();
+            blacklistRequest({
+                type: 'POST',
+                url: blacklistUrl(row.enabled ? '/blacklist/disable' : '/blacklist/enable'),
+                data: {ip: row.ip}
+            }).done(function (response) {
+                if (responseIsSuccess(response)) refreshAfterMutation();
+            });
+        },
+        'click .blacklist-delete': function (event, value, row) {
+            event.preventDefault();
+            var message = blacklistText('word-deleteblacklist', 'Delete blacklist IP') + ': ' + row.ip + '?';
+            if (!window.confirm(message)) return;
+            blacklistRequest({
+                type: 'POST',
+                url: blacklistUrl('/blacklist/delete'),
+                data: {ip: row.ip}
+            }).done(function (response) {
+                if (responseIsSuccess(response)) refreshAfterMutation();
+            });
+        }
+    };
+
+    $(function () {
+        $('#blacklist_table').bootstrapTable({
+            toolbar: '#blacklist_toolbar',
+            url: blacklistUrl('/blacklist/list'),
+            method: 'get',
+            sidePagination: 'server',
+            pagination: true,
+            pageNumber: 1,
+            pageSize: 50,
+            pageList: [20, 50, 100, 200],
+            escape: true,
+            queryParams: function (params) {
+                return {
+                    offset: params.offset || 0,
+                    limit: params.limit || 50,
+                    ip: $('#blacklist_ip_filter').val() || '',
+                    source: $('#blacklist_source_filter').val() || '',
+                    enabled: $('#blacklist_enabled_filter').val() || ''
+                };
+            },
+            onLoadError: function (status, xhr) {
+                showBlacklistError(xhr);
+            },
+            onPostBody: function () {
+                $('body').setLang('#blacklist_table');
+                $('.blacklist-toggle').each(function () {
+                    var row = $('#blacklist_table').bootstrapTable('getData')[$(this).closest('tr').data('index')];
+                    $(this).text(row && row.enabled ? blacklistText('word-disable', 'Disable') : blacklistText('word-enable', 'Enable'));
+                });
+            },
+            columns: [
+                {field: 'ip', title: '<span langtag="word-ip"></span>', sortable: false},
+                {field: 'source', title: '<span langtag="word-source"></span>', formatter: sourceFormatter},
+                {field: 'reason', title: '<span langtag="word-reason"></span>'},
+                {field: 'enabled', title: '<span langtag="word-enabled"></span>', formatter: enabledFormatter},
+                {field: 'active', title: '<span langtag="word-active"></span>', formatter: activeFormatter},
+                {field: 'expire_at', title: '<span langtag="word-expiretime"></span>', formatter: formatExpireTime},
+                {field: 'created_at', title: '<span langtag="word-createtime"></span>', formatter: formatUnixTime},
+                {field: 'option', title: '<span langtag="word-operation"></span>', events: window.blacklistOperateEvents, formatter: actionFormatter}
+            ]
+        });
+
+        $('#blacklist_search').on('click', function () {
+            $('#blacklist_table').bootstrapTable('refresh', {pageNumber: 1});
+        });
+        $('#blacklist_reset').on('click', function () {
+            $('#blacklist_ip_filter').val('');
+            $('#blacklist_source_filter').val('');
+            $('#blacklist_enabled_filter').val('');
+            $('#blacklist_table').bootstrapTable('refresh', {pageNumber: 1});
+        });
+        $('#blacklist_add').on('click', function () {
+            $('#blacklist_add_form')[0].reset();
+            $('#blacklist_add_enabled').prop('checked', true);
+            $('#blacklist_add_modal').modal('show');
+        });
+        $('#blacklist_add_form').on('submit', function (event) {
+            event.preventDefault();
+            blacklistRequest({
+                type: 'POST',
+                url: blacklistUrl('/blacklist/add'),
+                data: {
+                    ip: $('#blacklist_add_ip').val(),
+                    reason: $('#blacklist_add_reason').val(),
+                    expire_at: $('#blacklist_add_expire').val(),
+                    enabled: $('#blacklist_add_enabled').prop('checked') ? 'true' : 'false'
+                }
+            }).done(function (response) {
+                if (!responseIsSuccess(response)) return;
+                $('#blacklist_add_modal').modal('hide');
+                $('#blacklist_add_form')[0].reset();
+                $('#blacklist_add_enabled').prop('checked', true);
+                refreshAfterMutation();
+            });
+        });
+
+        if (typeof flatpickr !== 'undefined') {
+            flatpickr('#blacklist_add_expire', {
+                enableTime: true,
+                enableSeconds: true,
+                dateFormat: 'Y-m-d H:i:S',
+                time_24hr: true,
+                locale: (flatpickr.l10ns && flatpickr.l10ns.zh) ? 'zh' : 'default'
+            });
+        }
+        refreshStats();
+    });
+}());
+</script>

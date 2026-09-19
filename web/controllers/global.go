@@ -2,12 +2,13 @@ package controllers
 
 import (
 	"ehang.io/nps/lib/file"
-	"strings"
 )
 
 type GlobalController struct {
 	BaseController
 }
+
+var globalDBProvider = file.GetDb
 
 func (s *GlobalController) Index() {
 	//if s.Ctx.Request.Method == "GET" {
@@ -18,11 +19,10 @@ func (s *GlobalController) Index() {
 	s.SetInfo("global")
 	s.display("global/index")
 
-	global := file.GetDb().GetGlobal()
+	global := globalDBProvider().GetGlobal()
 	if global == nil {
 		return
 	}
-	s.Data["globalBlackIpList"] = strings.Join(global.BlackIpList, "\r\n")
 	s.Data["serverUrl"] = global.ServerUrl
 }
 
@@ -33,12 +33,16 @@ func (s *GlobalController) Save() {
 		s.SetInfo("save global")
 		s.display()
 	} else {
-
+		db := globalDBProvider()
+		current := db.GetGlobal()
 		t := &file.Glob{
-			BlackIpList: RemoveRepeatedElement(strings.Split(s.getEscapeString("globalBlackIpList"), "\r\n")),
-			ServerUrl:   s.getEscapeString("serverUrl")}
+			ServerUrl: s.getEscapeString("serverUrl"),
+		}
+		if current != nil {
+			t.BlackIpList = append([]string(nil), current.BlackIpList...)
+		}
 
-		if err := file.GetDb().SaveGlobal(t); err != nil {
+		if err := db.SaveGlobal(t); err != nil {
 			s.AjaxErr(err.Error())
 		}
 		s.AjaxOk("save success")

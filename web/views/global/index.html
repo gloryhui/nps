@@ -9,12 +9,14 @@
                 <div class="ibox-content">
 
                     <form class="form-horizontal">
-                        <div class="form-group" id="black_ip_list">
-                            <label class="control-label font-bold" langtag="word-globalblackiplist"></label>
-                            <div class="col-sm-4">
-                                <textarea class="form-control" rows="10" type="text" name="globalBlackIpList" placeholder=""
-                                          langtag="info-suchasblackiplist">{{.globalBlackIpList}}</textarea>
-                                <span class="help-block m-b-none" langtag="info-descblackiplist"></span>
+                        <div class="form-group">
+                            <div class="col-sm-10">
+                                <span class="help-block m-b-none">
+                                    <span langtag="info-globalblacklistmigrated"></span>
+                                    {{if eq true .isAdmin}}
+                                    <a href="{{.web_base_url}}/blacklist/index" langtag="word-blacklistmanagement"></a>
+                                    {{end}}
+                                </span>
                             </div>
                         </div>
 
