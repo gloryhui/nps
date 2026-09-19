@@ -144,6 +144,49 @@ func TestBlacklistServiceMutationsPublishAfterPersistence(t *testing.T) {
 	}
 }
 
+func TestBlacklistServiceManagementReadsAndStatsDoNotChangeRuntimeIndex(t *testing.T) {
+	service, repository := newTestBlacklistService(t)
+	if err := service.Add(BlacklistIPInput{IP: "192.0.2.60"}); err != nil {
+		t.Fatalf("add manual active record: %v", err)
+	}
+	now := time.Now().Unix()
+	expired := now - 1
+	if err := repository.BulkInsert([]BlacklistIP{
+		{IP: "192.0.2.61", Source: "manual", Enabled: false},
+		{IP: "192.0.2.62", Source: "import", Enabled: true},
+		{IP: "192.0.2.63", Source: "auto", Enabled: true, ExpireAt: &expired},
+		{IP: "192.0.2.64", Source: "auto", Enabled: false, ExpireAt: &expired},
+	}); err != nil {
+		t.Fatalf("seed management records: %v", err)
+	}
+
+	if !service.Contains("192.0.2.60") {
+		t.Fatal("seed active record is missing before management reads")
+	}
+	result, err := service.ListPage(ListOptions{Offset: 0, Limit: 10, Source: "manual"})
+	if err != nil {
+		t.Fatalf("ListPage() error = %v", err)
+	}
+	if result.Total != 2 || len(result.Items) != 2 {
+		t.Fatalf("ListPage() = %+v, want two manual records", result)
+	}
+	detail, err := service.GetByIP("192.0.2.60:443")
+	if err != nil || detail.Source != "manual" {
+		t.Fatalf("GetByIP() = %+v, %v; want manual record", detail, err)
+	}
+	stats, err := service.Stats(now)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	want := BlacklistStats{Total: 5, Enabled: 3, Disabled: 2, Manual: 2, Import: 1, Auto: 2, Expired: 2, Active: 2}
+	if stats != want {
+		t.Fatalf("Stats() = %+v, want %+v", stats, want)
+	}
+	if !service.Contains("192.0.2.60") || service.Contains("192.0.2.62") {
+		t.Fatal("management reads changed runtime index")
+	}
+}
+
 func TestBlacklistServiceReloadIsAtomicAndDBFailuresDoNotDirtyIndex(t *testing.T) {
 	service, repository := newTestBlacklistService(t)
 	if err := service.Add(BlacklistIPInput{IP: "192.0.2.30"}); err != nil {

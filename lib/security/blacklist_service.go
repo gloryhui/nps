@@ -22,6 +22,26 @@ type BlacklistService struct {
 	closeErr  error
 }
 
+// BlacklistListResult contains one SQLite-paginated management result.
+type BlacklistListResult struct {
+	Items  []BlacklistIP
+	Total  int64
+	Offset int
+	Limit  int
+}
+
+// BlacklistStats contains aggregate management counters.
+type BlacklistStats struct {
+	Total    int64
+	Enabled  int64
+	Disabled int64
+	Manual   int64
+	Import   int64
+	Auto     int64
+	Expired  int64
+	Active   int64
+}
+
 // NewBlacklistService imports legacy records once, then publishes a complete
 // active index. A load failure leaves no partially initialized service.
 func NewBlacklistService(repo *Repository, legacyIPs []string) (*BlacklistService, LegacyImportStats, error) {
@@ -102,6 +122,47 @@ func (s *BlacklistService) Contains(rawAddr string) bool {
 		return false
 	}
 	return expireAt == 0 || expireAt > time.Now().Unix()
+}
+
+// GetByIP reads one management record while coordinating with Close and
+// mutations. It never changes the runtime index.
+func (s *BlacklistService) GetByIP(rawIP string) (*BlacklistIP, error) {
+	if s == nil || s.repo == nil {
+		return nil, errors.New("blacklist service is not initialized")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.repo.GetByIP(rawIP)
+}
+
+// ListPage performs the row query and filtered count under one management
+// read lock so both results come from one serialized repository operation.
+func (s *BlacklistService) ListPage(options ListOptions) (BlacklistListResult, error) {
+	if s == nil || s.repo == nil {
+		return BlacklistListResult{}, errors.New("blacklist service is not initialized")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	items, err := s.repo.ListWithOptions(options)
+	if err != nil {
+		return BlacklistListResult{}, err
+	}
+	total, err := s.repo.CountWithOptions(options)
+	if err != nil {
+		return BlacklistListResult{}, err
+	}
+	return BlacklistListResult{Items: items, Total: total, Offset: options.Offset, Limit: options.Limit}, nil
+}
+
+// Stats returns SQLite aggregate counters using the supplied request time for
+// both expired and active calculations. It never changes the runtime index.
+func (s *BlacklistService) Stats(now int64) (BlacklistStats, error) {
+	if s == nil || s.repo == nil {
+		return BlacklistStats{}, errors.New("blacklist service is not initialized")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.repo.Stats(now)
 }
 
 // Add persists a record before publishing its eligible state to the runtime
