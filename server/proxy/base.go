@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"sort"
 	"sync"
 
 	"ehang.io/nps/bridge"
@@ -94,15 +93,6 @@ func (s *BaseServer) CheckFlowAndConnNum(client *file.Client) error {
 	return nil
 }
 
-func in(target string, str_array []string) bool {
-	sort.Strings(str_array)
-	index := sort.SearchStrings(str_array, target)
-	if index < len(str_array) && str_array[index] == target {
-		return true
-	}
-	return false
-}
-
 // create a new connection and start bytes copying
 func (s *BaseServer) DealClient(c *conn.Conn, client *file.Client, addr string,
 	rb []byte, tp string, f func(), flow *file.Flow, localProxy bool, task *file.Tunnel, host *file.Host) error {
@@ -142,12 +132,10 @@ func (s *BaseServer) DealClient(c *conn.Conn, client *file.Client, addr string,
 func IsGlobalBlackIp(ipPort string) bool {
 	// 判断访问地址是否在全局黑名单内
 	global := file.GetDb().GetGlobal()
-	if global != nil {
+	if global != nil && global.IsBlackIP(ipPort) {
 		ip := common.GetIpByAddr(ipPort)
-		if in(ip, global.BlackIpList) {
-			logs.Error("IP地址[" + ip + "]在全局黑名单列表内")
-			return true
-		}
+		logs.Error("IP地址[" + ip + "]在全局黑名单列表内")
+		return true
 	}
 
 	return false

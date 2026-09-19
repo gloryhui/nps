@@ -116,7 +116,10 @@ func (s *DbUtils) UpdateTask(t *Tunnel) error {
 }
 
 func (s *DbUtils) SaveGlobal(t *Glob) error {
+	t.RebuildBlackIPSet()
+	s.JsonDb.globalMu.Lock()
 	s.JsonDb.Global = t
+	s.JsonDb.globalMu.Unlock()
 	s.JsonDb.StoreGlobalToJsonFile()
 	return nil
 }
@@ -313,7 +316,10 @@ func (s *DbUtils) GetClient(id int) (c *Client, err error) {
 }
 
 func (s *DbUtils) GetGlobal() (c *Glob) {
-	return s.JsonDb.Global
+	s.JsonDb.globalMu.RLock()
+	c = s.JsonDb.Global
+	s.JsonDb.globalMu.RUnlock()
+	return c
 }
 
 func (s *DbUtils) GetClientIdByVkey(vkey string) (id int, err error) {

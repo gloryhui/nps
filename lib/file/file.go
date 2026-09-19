@@ -30,6 +30,7 @@ type JsonDb struct {
 	HostsTmp         sync.Map
 	Clients          sync.Map
 	Global           *Glob
+	globalMu         sync.RWMutex
 	RunPath          string
 	ClientIncreaseId int32  //client increased id
 	TaskIncreaseId   int32  //task increased id
@@ -100,7 +101,10 @@ func (s *JsonDb) LoadGlobalFromJsonFile() {
 		if json.Unmarshal([]byte(v), &post) != nil {
 			return
 		}
+		post.RebuildBlackIPSet()
+		s.globalMu.Lock()
 		s.Global = post
+		s.globalMu.Unlock()
 	})
 }
 
@@ -141,7 +145,10 @@ var globalLock sync.Mutex
 
 func (s *JsonDb) StoreGlobalToJsonFile() {
 	globalLock.Lock()
-	storeGlobalToFile(s.Global, s.GlobalFilePath)
+	s.globalMu.RLock()
+	global := s.Global
+	s.globalMu.RUnlock()
+	storeGlobalToFile(global, s.GlobalFilePath)
 	globalLock.Unlock()
 }
 

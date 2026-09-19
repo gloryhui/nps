@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"ehang.io/nps/lib/common"
 	"ehang.io/nps/lib/rate"
 	"github.com/pkg/errors"
 )
@@ -237,5 +238,34 @@ func (s *Target) GetRandomTarget() (string, error) {
 type Glob struct {
 	BlackIpList []string
 	ServerUrl   string
+	blackIPSet  map[string]struct{}
 	sync.RWMutex
+}
+
+// RebuildBlackIPSet builds the in-memory index used by the hot path.
+// BlackIpList remains the persisted representation for compatibility with
+// existing global.json files.
+func (s *Glob) RebuildBlackIPSet() {
+	index := make(map[string]struct{}, len(s.BlackIpList))
+	for _, ip := range s.BlackIpList {
+		ip = strings.TrimSpace(ip)
+		if ip != "" {
+			index[ip] = struct{}{}
+		}
+	}
+
+	s.Lock()
+	s.blackIPSet = index
+	s.Unlock()
+}
+
+// IsBlackIP checks the in-memory global blacklist without sorting or reading
+// the persisted list on each connection.
+func (s *Glob) IsBlackIP(addr string) bool {
+	ip := common.GetIpByAddr(addr)
+
+	s.RLock()
+	_, blocked := s.blackIPSet[ip]
+	s.RUnlock()
+	return blocked
 }
