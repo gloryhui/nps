@@ -96,7 +96,10 @@ type Repository struct {
 	closeErr  error
 }
 
-const schema = `
+// schemaV1 is the immutable schema introduced by the version 0 -> 1
+// migration. Once released, do not edit its historical meaning; future
+// schema changes must be represented by explicit versioned migrations.
+const schemaV1 = `
 CREATE TABLE IF NOT EXISTS blacklist_ip (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ip TEXT NOT NULL,
@@ -217,19 +220,9 @@ func migrateDatabase(db *sql.DB) error {
 	for version < currentSchemaVersion {
 		switch version {
 		case 0:
-			if _, err := tx.Exec(schema); err != nil {
+			if err := migrateV0ToV1(tx); err != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("migrate blacklist schema 0 to 1: %w", err)
-			}
-			// Recreate this index so databases created by the previous
-			// repository revision also receive the id tie-breaker.
-			if _, err := tx.Exec("DROP INDEX IF EXISTS idx_blacklist_created_at"); err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("replace blacklist created-at index: %w", err)
-			}
-			if _, err := tx.Exec("CREATE INDEX idx_blacklist_created_at ON blacklist_ip(created_at DESC, id DESC)"); err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("create blacklist created-at index: %w", err)
 			}
 			version = 1
 		default:
@@ -244,6 +237,21 @@ func migrateDatabase(db *sql.DB) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit blacklist schema migration: %w", err)
+	}
+	return nil
+}
+
+func migrateV0ToV1(tx *sql.Tx) error {
+	if _, err := tx.Exec(schemaV1); err != nil {
+		return fmt.Errorf("create schema v1: %w", err)
+	}
+	// Recreate this index so databases created by the previous repository
+	// revision also receive the id tie-breaker.
+	if _, err := tx.Exec("DROP INDEX IF EXISTS idx_blacklist_created_at"); err != nil {
+		return fmt.Errorf("replace blacklist created-at index: %w", err)
+	}
+	if _, err := tx.Exec("CREATE INDEX idx_blacklist_created_at ON blacklist_ip(created_at DESC, id DESC)"); err != nil {
+		return fmt.Errorf("create blacklist created-at index: %w", err)
 	}
 	return nil
 }
