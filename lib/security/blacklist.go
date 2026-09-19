@@ -404,23 +404,9 @@ func (r *Repository) ListWithOptions(options ListOptions) ([]BlacklistIP, error)
 		return nil, errors.New("blacklist list limit must be positive")
 	}
 
-	where := make([]string, 0, 3)
-	args := make([]any, 0, 5)
-	if options.IP != "" {
-		ip, err := NormalizeIP(options.IP)
-		if err != nil {
-			return nil, err
-		}
-		where = append(where, "ip = ?")
-		args = append(args, ip)
-	}
-	if options.Source != "" {
-		where = append(where, "source = ?")
-		args = append(args, options.Source)
-	}
-	if options.Enabled != nil {
-		where = append(where, "enabled = ?")
-		args = append(args, boolValue(*options.Enabled))
+	where, args, err := buildBlacklistWhere(options)
+	if err != nil {
+		return nil, err
 	}
 
 	query := "SELECT " + selectColumns + " FROM blacklist_ip"
@@ -448,6 +434,77 @@ func (r *Repository) ListWithOptions(options ListOptions) ([]BlacklistIP, error)
 		return nil, fmt.Errorf("iterate blacklist IPs: %w", err)
 	}
 	return entries, nil
+}
+
+// CountWithOptions returns the number of rows matching the filters. Offset
+// and limit are intentionally ignored; callers receive the filtered total.
+func (r *Repository) CountWithOptions(options ListOptions) (int64, error) {
+	where, args, err := buildBlacklistWhere(options)
+	if err != nil {
+		return 0, err
+	}
+
+	query := "SELECT COUNT(*) FROM blacklist_ip"
+	if len(where) != 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	var count int64
+	if err := r.db.QueryRow(query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count filtered blacklist IPs: %w", err)
+	}
+	return count, nil
+}
+
+// Stats returns aggregate blacklist counters without loading rows into Go.
+func (r *Repository) Stats(now int64) (BlacklistStats, error) {
+	const query = `
+SELECT
+    COUNT(*),
+    COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN enabled = 0 THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN source = 'manual' THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN source = 'import' THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN source = 'auto' THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN expire_at IS NOT NULL AND expire_at <= ? THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN enabled = 1 AND (expire_at IS NULL OR expire_at > ?) THEN 1 ELSE 0 END), 0)
+FROM blacklist_ip
+`
+	var stats BlacklistStats
+	if err := r.db.QueryRow(query, now, now).Scan(
+		&stats.Total,
+		&stats.Enabled,
+		&stats.Disabled,
+		&stats.Manual,
+		&stats.Import,
+		&stats.Auto,
+		&stats.Expired,
+		&stats.Active,
+	); err != nil {
+		return BlacklistStats{}, fmt.Errorf("get blacklist stats: %w", err)
+	}
+	return stats, nil
+}
+
+func buildBlacklistWhere(options ListOptions) ([]string, []any, error) {
+	where := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if options.IP != "" {
+		ip, err := NormalizeIP(options.IP)
+		if err != nil {
+			return nil, nil, err
+		}
+		where = append(where, "ip = ?")
+		args = append(args, ip)
+	}
+	if options.Source != "" {
+		where = append(where, "source = ?")
+		args = append(args, options.Source)
+	}
+	if options.Enabled != nil {
+		where = append(where, "enabled = ?")
+		args = append(args, boolValue(*options.Enabled))
+	}
+	return where, args, nil
 }
 
 // Page returns a one-based page and its total row count. Both the page and

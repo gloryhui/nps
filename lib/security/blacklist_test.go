@@ -305,6 +305,46 @@ func TestBlacklistRepositoryListAndPageUseDatabasePagination(t *testing.T) {
 	}
 }
 
+func TestBlacklistRepositoryFilteredCountMatchesList(t *testing.T) {
+	repository, _ := newTestRepository(t)
+	entries := []BlacklistIP{
+		{IP: "192.0.2.50", Source: "manual", Enabled: true, CreatedAt: 1},
+		{IP: "192.0.2.51", Source: "manual", Enabled: false, CreatedAt: 2},
+		{IP: "192.0.2.52", Source: "import", Enabled: true, CreatedAt: 3},
+		{IP: "192.0.2.53", Source: "auto", Enabled: true, CreatedAt: 4},
+	}
+	if err := repository.BulkInsert(entries); err != nil {
+		t.Fatalf("BulkInsert() error = %v", err)
+	}
+
+	enabled := true
+	options := ListOptions{Offset: 0, Limit: 2, Source: "manual", Enabled: &enabled}
+	items, err := repository.ListWithOptions(options)
+	if err != nil {
+		t.Fatalf("ListWithOptions() error = %v", err)
+	}
+	total, err := repository.CountWithOptions(options)
+	if err != nil {
+		t.Fatalf("CountWithOptions() error = %v", err)
+	}
+	if len(items) != 1 || total != int64(len(items)) || items[0].IP != "192.0.2.50" {
+		t.Fatalf("filtered rows = %+v, total = %d; want one manual enabled row", items, total)
+	}
+
+	count, err := repository.CountWithOptions(ListOptions{Source: "manual"})
+	if err != nil || count != 2 {
+		t.Fatalf("manual CountWithOptions() = %d, %v; want 2, nil", count, err)
+	}
+	count, err = repository.CountWithOptions(ListOptions{Enabled: &enabled})
+	if err != nil || count != 3 {
+		t.Fatalf("enabled CountWithOptions() = %d, %v; want 3, nil", count, err)
+	}
+	count, err = repository.CountWithOptions(ListOptions{IP: "192.0.2.50:443"})
+	if err != nil || count != 1 {
+		t.Fatalf("exact IP CountWithOptions() = %d, %v; want 1, nil", count, err)
+	}
+}
+
 func TestBlacklistRepositoryBulkInsertSkipsDuplicatesInOneBatch(t *testing.T) {
 	repository, _ := newTestRepository(t)
 	entries := []BlacklistIP{
