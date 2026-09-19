@@ -776,6 +776,135 @@
 		<en-US>Global IP Black List</en-US>
 	</lang>
 
+	<lang id="word-blacklistmanagement">
+		<zh-CN>黑名单管理</zh-CN>
+		<en-US>Blacklist Management</en-US>
+	</lang>
+	<lang id="word-total">
+		<zh-CN>总数</zh-CN>
+		<en-US>Total</en-US>
+	</lang>
+	<lang id="word-active">
+		<zh-CN>活跃</zh-CN>
+		<en-US>Active</en-US>
+	</lang>
+	<lang id="word-enabled">
+		<zh-CN>启用</zh-CN>
+		<en-US>Enabled</en-US>
+	</lang>
+	<lang id="word-disabled">
+		<zh-CN>禁用</zh-CN>
+		<en-US>Disabled</en-US>
+	</lang>
+	<lang id="word-manual">
+		<zh-CN>手动</zh-CN>
+		<en-US>Manual</en-US>
+	</lang>
+	<lang id="word-import">
+		<zh-CN>导入</zh-CN>
+		<en-US>Import</en-US>
+	</lang>
+	<lang id="word-auto">
+		<zh-CN>自动</zh-CN>
+		<en-US>Auto</en-US>
+	</lang>
+	<lang id="word-expired">
+		<zh-CN>已过期</zh-CN>
+		<en-US>Expired</en-US>
+	</lang>
+	<lang id="word-inactive">
+		<zh-CN>不活跃</zh-CN>
+		<en-US>Inactive</en-US>
+	</lang>
+	<lang id="word-ip">
+		<zh-CN>IP</zh-CN>
+		<en-US>IP</en-US>
+	</lang>
+	<lang id="word-source">
+		<zh-CN>来源</zh-CN>
+		<en-US>Source</en-US>
+	</lang>
+	<lang id="word-reason">
+		<zh-CN>原因</zh-CN>
+		<en-US>Reason</en-US>
+	</lang>
+	<lang id="word-updatedtime">
+		<zh-CN>更新时间</zh-CN>
+		<en-US>Updated Time</en-US>
+	</lang>
+	<lang id="word-firstseen">
+		<zh-CN>首次发现时间</zh-CN>
+		<en-US>First Seen</en-US>
+	</lang>
+	<lang id="word-lastseen">
+		<zh-CN>最近发现时间</zh-CN>
+		<en-US>Last Seen</en-US>
+	</lang>
+	<lang id="word-hitcount">
+		<zh-CN>命中次数</zh-CN>
+		<en-US>Hit Count</en-US>
+	</lang>
+	<lang id="word-operation">
+		<zh-CN>操作</zh-CN>
+		<en-US>Operation</en-US>
+	</lang>
+	<lang id="word-addblacklist">
+		<zh-CN>添加黑名单</zh-CN>
+		<en-US>Add Blacklist</en-US>
+	</lang>
+	<lang id="word-permanent">
+		<zh-CN>永久</zh-CN>
+		<en-US>Permanent</en-US>
+	</lang>
+	<lang id="word-search">
+		<zh-CN>搜索</zh-CN>
+		<en-US>Search</en-US>
+	</lang>
+	<lang id="word-reset">
+		<zh-CN>重置</zh-CN>
+		<en-US>Reset</en-US>
+	</lang>
+	<lang id="word-detail">
+		<zh-CN>详情</zh-CN>
+		<en-US>Detail</en-US>
+	</lang>
+	<lang id="word-enable">
+		<zh-CN>启用</zh-CN>
+		<en-US>Enable</en-US>
+	</lang>
+	<lang id="word-disable">
+		<zh-CN>禁用</zh-CN>
+		<en-US>Disable</en-US>
+	</lang>
+	<lang id="word-delete">
+		<zh-CN>删除</zh-CN>
+		<en-US>Delete</en-US>
+	</lang>
+	<lang id="word-deleteblacklist">
+		<zh-CN>删除黑名单 IP</zh-CN>
+		<en-US>Delete blacklist IP</en-US>
+	</lang>
+	<lang id="word-cancel">
+		<zh-CN>取消</zh-CN>
+		<en-US>Cancel</en-US>
+	</lang>
+	<lang id="info-exactip">
+		<zh-CN>精确 IP</zh-CN>
+		<en-US>Exact IP</en-US>
+	</lang>
+	<lang id="info-blacklistexpire">
+		<zh-CN>留空表示永久</zh-CN>
+		<en-US>Leave blank for permanent</en-US>
+	</lang>
+	<lang id="info-globalblacklistmigrated">
+		<zh-CN>全局黑名单已迁移至黑名单管理。</zh-CN>
+		<en-US>The global blacklist has moved to Blacklist Management.</en-US>
+	</lang>
+	<lang id="info-requestfailed">
+		<zh-CN>请求失败</zh-CN>
+		<en-US>Request failed</en-US>
+	</lang>
+
 	<lang id="word-serverurl">
 		<zh-CN>服务地址</zh-CN>
 		<en-US>Server</en-US>
