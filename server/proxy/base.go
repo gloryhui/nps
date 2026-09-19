@@ -10,6 +10,7 @@ import (
 	"ehang.io/nps/lib/common"
 	"ehang.io/nps/lib/conn"
 	"ehang.io/nps/lib/file"
+	"ehang.io/nps/lib/security"
 	"github.com/astaxie/beego/logs"
 )
 
@@ -130,13 +131,6 @@ func (s *BaseServer) DealClient(c *conn.Conn, client *file.Client, addr string,
 
 // 判断访问地址是否在全局黑名单内
 func IsGlobalBlackIp(ipPort string) bool {
-	// 判断访问地址是否在全局黑名单内
-	global := file.GetDb().GetGlobal()
-	if global != nil && global.IsBlackIP(ipPort) {
-		ip := common.GetIpByAddr(ipPort)
-		logs.Error("IP地址[" + ip + "]在全局黑名单列表内")
-		return true
-	}
-
-	return false
+	service := security.GetDefaultBlacklistService()
+	return service != nil && service.Contains(ipPort)
 }
