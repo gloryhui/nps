@@ -145,12 +145,15 @@ func indexSize(service *BlacklistService) int64 {
 	return int64(len(service.index))
 }
 
-func measureDuration(iterations int, fn func()) time.Duration {
+func measureAverageDuration(iterations int, fn func()) time.Duration {
+	if iterations <= 0 {
+		return 0
+	}
 	start := time.Now()
 	for i := 0; i < iterations; i++ {
 		fn()
 	}
-	return time.Since(start)
+	return time.Since(start) / time.Duration(iterations)
 }
 
 func explainQueryPlan(t *testing.T, repository *Repository, query string, args ...any) string {
@@ -372,6 +375,9 @@ func runBlacklistScaleReport(t *testing.T, scale int) {
 		t.Fatalf("NewBlacklistService(%d) error = %v", scale, err)
 	}
 	loadDuration := time.Since(loadStarted)
+	// Keep forced post-load GC outside the startup timer. The resulting
+	// HeapAlloc delta approximates retained live Go heap for the loaded service.
+	runtime.GC()
 	runtime.ReadMemStats(&after)
 	loadedIndexSize := indexSize(service)
 	if loadedIndexSize != expected.activeRows {
@@ -397,25 +403,25 @@ func runBlacklistScaleReport(t *testing.T, scale int) {
 	tailIP := scaleIP(scale - 1)
 	missingIP := "192.0.2.254"
 	getIterations := 3
-	getFirst := measureDuration(getIterations, func() {
+	getFirst := measureAverageDuration(getIterations, func() {
 		entry, getErr := service.GetByIP(firstIP)
 		if getErr != nil || entry == nil {
 			t.Fatalf("GetByIP(first=%q): entry=%+v err=%v", firstIP, entry, getErr)
 		}
 	})
-	getMiddle := measureDuration(getIterations, func() {
+	getMiddle := measureAverageDuration(getIterations, func() {
 		entry, getErr := service.GetByIP(middleIP)
 		if getErr != nil || entry == nil {
 			t.Fatalf("GetByIP(middle=%q): entry=%+v err=%v", middleIP, entry, getErr)
 		}
 	})
-	getTail := measureDuration(getIterations, func() {
+	getTail := measureAverageDuration(getIterations, func() {
 		entry, getErr := service.GetByIP(tailIP)
 		if getErr != nil || entry == nil {
 			t.Fatalf("GetByIP(tail=%q): entry=%+v err=%v", tailIP, entry, getErr)
 		}
 	})
-	getMiss := measureDuration(getIterations, func() {
+	getMiss := measureAverageDuration(getIterations, func() {
 		entry, getErr := service.GetByIP(missingIP)
 		if entry != nil || !errors.Is(getErr, ErrNotFound) {
 			t.Fatalf("GetByIP(miss=%q): entry=%+v err=%v", missingIP, entry, getErr)
@@ -423,20 +429,20 @@ func runBlacklistScaleReport(t *testing.T, scale int) {
 	})
 
 	listIterations := 3
-	firstPage := measureDuration(listIterations, func() {
+	firstPage := measureAverageDuration(listIterations, func() {
 		items, listErr := service.ListPage(ListOptions{Offset: 0, Limit: 50})
 		if listErr != nil || len(items.Items) != 50 {
 			t.Fatalf("ListPage(first): items=%d err=%v", len(items.Items), listErr)
 		}
 	})
-	middlePage := measureDuration(listIterations, func() {
+	middlePage := measureAverageDuration(listIterations, func() {
 		items, listErr := service.ListPage(ListOptions{Offset: scale / 2, Limit: 50})
 		if listErr != nil || len(items.Items) != 50 {
 			t.Fatalf("ListPage(middle): items=%d err=%v", len(items.Items), listErr)
 		}
 	})
 	tailOffset := scale - 50
-	tailPage := measureDuration(listIterations, func() {
+	tailPage := measureAverageDuration(listIterations, func() {
 		items, listErr := service.ListPage(ListOptions{Offset: tailOffset, Limit: 50})
 		if listErr != nil || len(items.Items) != 50 {
 			t.Fatalf("ListPage(tail): items=%d err=%v", len(items.Items), listErr)
@@ -524,7 +530,7 @@ func runBlacklistScaleReport(t *testing.T, scale int) {
 
 	heapDelta := int64(after.HeapAlloc) - int64(before.HeapAlloc)
 	totalAllocDelta := int64(after.TotalAlloc) - int64(before.TotalAlloc)
-	t.Logf("BLACKLIST_SCALE scale=%d seed=deterministic-ipv4-ipv6 input_rows=%d rows=%d bulk_ms=%.3f rows_per_sec=%.2f db_main_bytes=%d db_wal_bytes=%d db_shm_bytes=%d db_total_bytes=%d db_after_close_main_bytes=%d db_after_close_wal_bytes=%d db_after_close_shm_bytes=%d db_after_close_total_bytes=%d startup_ms=%.3f runtime_index=%d heap_delta=%d total_alloc_delta=%d num_gc_delta=%d stats_ms=%.3f get_first_ms=%.3f get_middle_ms=%.3f get_tail_ms=%.3f get_miss_ms=%.3f list_first_ms=%.3f list_middle_ms=%.3f list_tail_ms=%.3f query_plan_exact=%q query_plan_source=%q query_plan_enabled=%q query_plan_source_enabled=%q journal_mode=%s marker=1 heap_note=go_heap_approximate", scale, scale, rows, float64(insertDuration)/float64(time.Millisecond), float64(scale)/insertDuration.Seconds(), openSizes.main, openSizes.wal, openSizes.shm, openSizes.total, closedSizes.main, closedSizes.wal, closedSizes.shm, closedSizes.total, float64(loadDuration)/float64(time.Millisecond), loadedIndexSize, heapDelta, totalAllocDelta, after.NumGC-before.NumGC, float64(statsDuration)/float64(time.Millisecond), float64(getFirst)/float64(time.Millisecond), float64(getMiddle)/float64(time.Millisecond), float64(getTail)/float64(time.Millisecond), float64(getMiss)/float64(time.Millisecond), float64(firstPage)/float64(time.Millisecond), float64(middlePage)/float64(time.Millisecond), float64(tailPage)/float64(time.Millisecond), exactPlan, sourcePlan, enabledPlan, combinedPlan, journalMode)
+	t.Logf("BLACKLIST_SCALE scale=%d seed=deterministic-ipv4-ipv6 input_rows=%d rows=%d bulk_ms=%.3f rows_per_sec=%.2f db_main_bytes=%d db_wal_bytes=%d db_shm_bytes=%d db_total_bytes=%d db_after_close_main_bytes=%d db_after_close_wal_bytes=%d db_after_close_shm_bytes=%d db_after_close_total_bytes=%d startup_ms=%.3f runtime_index=%d heap_delta=%d total_alloc_delta=%d num_gc_delta=%d stats_ms=%.3f get_first_ms=%.3f get_middle_ms=%.3f get_tail_ms=%.3f get_miss_ms=%.3f list_first_ms=%.3f list_middle_ms=%.3f list_tail_ms=%.3f query_plan_exact=%q query_plan_source=%q query_plan_enabled=%q query_plan_source_enabled=%q journal_mode=%s marker=1 timing_note=average_per_operation heap_note=post_load_forced_gc_live_go_heap_approximate num_gc_note=includes_post_load_forced_gc", scale, scale, rows, float64(insertDuration)/float64(time.Millisecond), float64(scale)/insertDuration.Seconds(), openSizes.main, openSizes.wal, openSizes.shm, openSizes.total, closedSizes.main, closedSizes.wal, closedSizes.shm, closedSizes.total, float64(loadDuration)/float64(time.Millisecond), loadedIndexSize, heapDelta, totalAllocDelta, after.NumGC-before.NumGC, float64(statsDuration)/float64(time.Millisecond), float64(getFirst)/float64(time.Millisecond), float64(getMiddle)/float64(time.Millisecond), float64(getTail)/float64(time.Millisecond), float64(getMiss)/float64(time.Millisecond), float64(firstPage)/float64(time.Millisecond), float64(middlePage)/float64(time.Millisecond), float64(tailPage)/float64(time.Millisecond), exactPlan, sourcePlan, enabledPlan, combinedPlan, journalMode)
 }
 
 func filteredPlanQuery(options ListOptions) string {

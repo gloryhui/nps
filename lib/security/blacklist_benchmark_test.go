@@ -102,7 +102,6 @@ func BenchmarkBlacklistBulkInsertScale(b *testing.B) {
 		size := size
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			entries, _ := buildScaleEntries(size, time.Now().Unix())
-			b.SetBytes(int64(size))
 			b.ResetTimer()
 			for iteration := 0; iteration < b.N; iteration++ {
 				b.StopTimer()
